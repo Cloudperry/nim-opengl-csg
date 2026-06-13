@@ -1,6 +1,6 @@
 # Package
 version = "0.1.0"
-author = "Roni Hokkanen"
+author = "Roni"
 description = "A computer graphics project in Nim and OpenGL"
 srcDir = "src"
 binDir = "bin"
