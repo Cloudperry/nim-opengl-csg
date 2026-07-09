@@ -1,6 +1,6 @@
 import std/[os, strformat, options, math, monotimes, sequtils, importutils, sugar]
 import std/times except `getTime`
-import pkg/[glm, glfw, cligen]
+import pkg/[glm, glfw, confutils]
 from pkg/glfw/wrapper import `rawMouseMotionSupported`
 import ./glad/gl
 import GlUtils, Slangc, Scene, Logger, Shapes, SdfScene
@@ -365,18 +365,65 @@ proc initGlfwAndGlad(): tuple[win: Window, cfg: OpenglWindowConfig] =
   glfw.swapInterval(1)
   return (win, cfg)
 
-proc main(slangPath = "", scene = DynamicObjectsTestRoom, useSpirV = false;
-          camLockX = 0'f32, camLockY = 0'f32, camLockZ = 0'f32, camLockYaw = 0'f32,
-          camLockPitch = 0'f32, lockTime = -1'f32) =
-  sdfRenderer.scene = scene
+type Config* = object # Game settings
+  scene* {.
+    name: "scene",
+    defaultValue: DynamicObjectsTestRoom,
+    desc: "Select a scene"
+  .}: SdfRendererScene
+  # Renderer settings
+  slangBinPath* {.
+    name: "slangBinPath",
+    defaultValue: "",
+    desc: "Slang shader compiler binary path"
+  .}: string
+  swapInterval* {.
+    name: "swapInterval",
+    defaultValue: 1,
+    desc: "Controls VSync (0 = VSync off, 1 = VSync on, 2 = half-rate VSync on)"
+  .}: int
+  useSpirV* {.
+    name: "useSpirV",
+    defaultValue: false,
+    desc: "Use SPIR-V for shader compilation"
+  .}: bool
+  camLockX* {.
+    name: "camLockX",
+    defaultValue: 0.0,
+  .}: float32
+  camLockY* {.
+    name: "camLockY",
+    defaultValue: 0.0,
+  .}: float32
+  camLockZ* {.
+    name: "camLockZ",
+    defaultValue: 0.0,
+  .}: float32
+  camLockYaw* {.
+    name: "camLockYaw",
+    defaultValue: 0.0,
+  .}: float32
+  camLockPitch* {.
+    name: "camLockPitch",
+    defaultValue: 0.0,
+  .}: float32
+  lockTime* {.
+    name: "lockTime",
+    defaultValue: 0.0,
+  .}: float32
+
+
+proc main() =
+  let conf = Config.load(copyrightBanner = "Sphere tracing renderer")
+  sdfRenderer.scene = conf.scene
   let slangToGlslStart = getMonoTime()
-  compileShaders(useSpirV, slangPath)
+  compileShaders(conf.useSpirV, conf.slangBinPath)
   let slangToGlslEnd = getMonoTime()
   let slangToGlslTime = slangToGlslEnd - slangToGlslStart
 
   var (win, cfg) = initGlfwAndGlad()
-  let cameraPos = vec3f(camLockX, camLockY, camLockZ)
-  win.init(useSpirV, cameraPos, camLockYaw, camLockPitch, lockTime, slangToGlslTime)
+  let cameraPos = vec3f(conf.camLockX, conf.camLockY, conf.camLockZ)
+  win.init(conf.useSpirV, cameraPos, conf.camLockYaw, conf.camLockPitch, conf.lockTime, slangToGlslTime)
 
   var frame = FrameState()
   var prevFrameStart = getMonoTime()
@@ -408,5 +455,4 @@ proc main(slangPath = "", scene = DynamicObjectsTestRoom, useSpirV = false;
   let bufferDurationSec = inSeconds(stats.bufferDuration)
   logger.writeTerminalStatusLine some(&"Performance stats for last {bufferDurationSec} seconds:\n  FPS: {fpsAvg:.1f} ({avgFrameUs} µs), 5% Min/max frametimes: {minTime}/{maxTime} μs")
 
-when isMainModule:
-  dispatch main
+main()
