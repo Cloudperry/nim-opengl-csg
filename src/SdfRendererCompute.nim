@@ -1,4 +1,4 @@
-import std/[os, strformat, options, math, monotimes, sequtils, importutils, sugar]
+import std/[os, strformat, strutils, options, math, monotimes, sequtils, importutils, sugar]
 import std/times except `getTime`
 import pkg/[glm, glfw, confutils]
 from pkg/glfw/wrapper import `rawMouseMotionSupported`
@@ -27,7 +27,7 @@ type
     cameraOpts: FpCameraOptions
     prevCursorX, prevCursorY: float
     # Graphics
-    vertexShaderText, fragmentShaderText: string
+    computeShaderText: string
     camera: RasterizedCamera
     cameraLocked: bool
     lockTime: float32
@@ -47,8 +47,9 @@ type
     sceneProgram: ShaderDataBufferRef[seq[SdfInstruction]]
     pointLights: ShaderDataBufferRef[seq[PointLight]]
     sceneBuilder: SceneBuilder
-    imagePlaneVbo: VertexBufferRef[ScreenSpaceVertex]
-    imagePlaneVao: VertexArrayRef
+    outputTexture: GLuint
+    blitFbo: GLuint
+    fbWidth, fbHeight: int32
     dynamicCutter: tuple[outputI: uint8, instI: int]
     movingSphere: tuple[outputI: uint8, instI: int]
     scene: SdfRendererScene
@@ -177,6 +178,42 @@ proc softShadowsScene() =
   discard sdfRenderer.sceneBuilder.combine(gb2, box3).outputI 
   sdfRenderer.sceneProgramData.uploadField(materialData)
 
+proc initComputeShaderProg(computeSrc: string, useSpirV: bool): ShaderRef =
+  result = new ShaderRef
+  var computeShader: GLuint = glCreateShader(GL_COMPUTE_SHADER)
+  if not useSpirV:
+    glShaderSourceStr(computeShader, 1, computeSrc)
+    glCompileShader(computeShader)
+  else:
+    glShaderBinaryStr(1, addr computeShader, computeSrc)
+    glSpecializeShader(computeShader, "main", 0, cast[ptr GLuint](nil), cast[ptr GLuint](nil))
+  checkErrorAndRaise(computeShader)
+  result.id = glCreateProgram()
+  glAttachShader(result.id, computeShader)
+  glLinkProgram(result.id)
+  checkLinkErrorAndRaise(result.id)
+  glDeleteShader(computeShader)
+
+# Creates (or recreates on resize) the linear color texture that the compute shader renders into, plus a framebuffer
+# with that texture attached so it can be blitted to the default framebuffer.
+proc initOutputTexture(width, height: int32) =
+  if sdfRenderer.outputTexture != 0:
+    glDeleteTextures(1, addr sdfRenderer.outputTexture)
+  glGenTextures(1, addr sdfRenderer.outputTexture)
+  glBindTexture(GL_TEXTURE_2D, sdfRenderer.outputTexture)
+  glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, width, height)
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GLint(GL_NEAREST))
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GLint(GL_NEAREST))
+  glBindTexture(GL_TEXTURE_2D, 0)
+
+  if sdfRenderer.blitFbo == 0:
+    glGenFramebuffers(1, addr sdfRenderer.blitFbo)
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, sdfRenderer.blitFbo)
+  glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sdfRenderer.outputTexture, 0)
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, 0)
+  sdfRenderer.fbWidth = width
+  sdfRenderer.fbHeight = height
+
 proc init(win: Window, useSpirV: bool, cameraLockPos: Vec3f;
           cameraLockYaw, cameraLockPitch, lockTime: float32, slangToGlslTime: Duration) =
   let monitorSize = (state.monitor.workArea.w, state.monitor.workArea.h)
@@ -199,10 +236,7 @@ proc init(win: Window, useSpirV: bool, cameraLockPos: Vec3f;
   updateCameraAspect(width, height)
 
   let shaderCompileStart = getMonoTime()
-  if not useSpirV:
-    sdfRenderer.shader = initShaderProg(state.vertexShaderText, state.fragmentShaderText)
-  else:
-    sdfRenderer.shader = initBinShaderProg(state.vertexShaderText, state.fragmentShaderText)
+  sdfRenderer.shader = initComputeShaderProg(state.computeShaderText, useSpirV)
   let shaderCompileEnd = getMonoTime()
   let shaderCompileTime = shaderCompileEnd - shaderCompileStart
   let shaderCompileTotalTime = slangToGlslTime + shaderCompileTime
@@ -222,22 +256,13 @@ proc init(win: Window, useSpirV: bool, cameraLockPos: Vec3f;
   of DynamicObjectsTestRoom: dynamicObjectsScene()
   of SoftShadowsTest: softShadowsScene()
 
-  let imagePlaneTriangle = @[
-    ScreenSpaceVertex(pos: vec2f(-1.0, -1.0), uv: vec2f(0.0, 0.0)), # Bottom left
-    ScreenSpaceVertex(pos: vec2f(3.0, -1.0), uv: vec2f(2.0, 0.0)), # Bottom right
-    ScreenSpaceVertex(pos: vec2f(-1.0, 3.0), uv: vec2f(0.0, 2.0)) # Top left
-  ]
-
-  sdfRenderer.imagePlaneVbo = initVertexBuffer (imagePlaneTriangle, GL_STATIC_DRAW).some
-  sdfRenderer.imagePlaneVao = initVertexArray()
-  sdfRenderer.imagePlaneVao.use()
-  sdfRenderer.imagePlaneVbo.use()
+  initOutputTexture(width.int32, height.int32)
 
   glEnable(GL_FRAMEBUFFER_SRGB)
 
 proc uninit() =
-  sdfRenderer.imagePlaneVbo.cleanup()
-  sdfRenderer.imagePlaneVao.cleanup()
+  glDeleteTextures(1, addr sdfRenderer.outputTexture)
+  glDeleteFramebuffers(1, addr sdfRenderer.blitFbo)
   sdfRenderer.sceneUbo.cleanup()
   sdfRenderer.shader.cleanup()
 
@@ -284,23 +309,35 @@ proc setUniforms(c: RasterizedCamera) =
   sdfRenderer.sceneUbo.camUp = c.up
 
 proc draw(win: Window) =
-  glClearColor(0.2, 0.3, 0.3, 1.0)
-  glClear(GL_COLOR_BUFFER_BIT)
-  
+  let (width, height) = glfw.framebufferSize(win)
+  if width.int32 != sdfRenderer.fbWidth or height.int32 != sdfRenderer.fbHeight:
+    initOutputTexture(width.int32, height.int32)
+
   sdfRenderer.shader.use()
   sdfRenderer.sceneUbo.use(sdfRenderer.shader)
-  # TODO: Move this into the appropriate callback
-  let (width, height) = glfw.framebufferSize(win)
   sdfRenderer.sceneUbo.aspect = width / height
   sdfRenderer.sceneUbo.hitColor = vec3f(1, 1, 1)
   sdfRenderer.sceneUbo.bgColor = vec3f(0.2, 0.3, 0.3)
   sdfRenderer.sceneUbo.fov = 80
   state.camera.setUniforms()
 
-  sdfRenderer.imagePlaneVao.use()
   sdfRenderer.sceneProgramData.uploadField(args)
   sdfRenderer.sceneProgram.upload()
-  glDrawArrays(GL_TRIANGLES, 0, 6)
+
+  # Render the scene into the output texture with the compute shader
+  glBindImageTexture(3.GLuint, sdfRenderer.outputTexture, 0.GLint, false, 0.GLint, GL_WRITE_ONLY, GL_RGBA32F)
+  let groupsX = GLuint((width + 7) div 8)
+  let groupsY = GLuint((height + 7) div 8)
+  glDispatchCompute(groupsX, groupsY, 1)
+  glMemoryBarrier(GL_FRAMEBUFFER_BARRIER_BIT)
+
+  # Blit the rendered image to the default framebuffer for display
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, sdfRenderer.blitFbo)
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0)
+  glBlitFramebuffer(
+    0, 0, width.GLint, height.GLint, 0, 0, width.GLint, height.GLint, GL_COLOR_BUFFER_BIT, GL_NEAREST
+  )
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, 0)
 
 proc sizeCb(win: Window, size: tuple[w, h: int32]) = 
   updateCameraAspect(size.w, size.h)
@@ -357,19 +394,20 @@ proc positionCb(win: Window, pos: tuple[x, y: int32]) =
 proc compileShaders(useSpirV: bool, slangPath = "") =
   # TODO: Fields are set using setter procs here to make sure the output file field gets updated. Make the API
   # in Slangc better by adding init proc.
-  var opts = SlangcOptions(entryPoint: "vertexMain")
+  var opts = SlangcOptions(entryPoint: "computeMain")
   if not useSpirV:
     opts.target = Glsl
   else:
     opts.target = SpirV
-  opts.stage = Vertex
+  opts.stage = Compute
   opts.inFile = shadersDir / "SdfRenderer.slang"
   if slangPath.len > 0: opts.slangPath = slangPath
-  state.vertexShaderText = compileShaderOrRaise(opts)
-
-  opts.stage = Fragment
-  opts.entryPoint = "fragmentMain"
-  state.fragmentShaderText = compileShaderOrRaise(opts)
+  state.computeShaderText = compileShaderOrRaise(opts)
+  if not useSpirV:
+    # Slang spuriously requires this extension for the image size/store built-ins even though they are core in GLSL
+    # 4.60. Mesa rejects the (unused) directive in compute shaders, so strip it out.
+    state.computeShaderText =
+      state.computeShaderText.replace("#extension GL_EXT_samplerless_texture_functions : require\n", "")
 
 proc initGlfwAndGlad(conf: Config): tuple[win: Window, cfg: OpenglWindowConfig] =
   # GLFW window and OpenGL context init

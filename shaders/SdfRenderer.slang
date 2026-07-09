@@ -131,6 +131,8 @@ StructuredBuffer<SdfProgramData> sdfProgData;
 StructuredBuffer<SdfInstruction> sdfProg;
 [[vk::binding(2)]]
 StructuredBuffer<PointLight> pointLights;
+[[vk::binding(3)]]
+RWTexture2D<float4> outputImage;
 
 struct VertexInput {
   [[vk::location(0)]]
@@ -791,7 +793,7 @@ FragmentOutput fragmentMain(VertexOutput input) {
   float z = 1.0 / tan(radians(scene.fov) * 0.5); // Image plane depth
   float3 rayDirection = normalize(scene.camForward * z + scene.camRight * uvNdc.x + scene.camUp * uvNdc.y);
 
-  renderScene(SdfProgramSceneNoMaterials(), output, rayDirection);
+  renderScene(DynamicObjectsSceneConversion(), output, rayDirection);
   // NOTE: Add a toggle for this in case someone uses this renderer on a display that has built-in dithering. That could
   // cause visible interference patterns between the two types of dithering.
   output.color += gradientNoiseWithStrength(input.fragCoord.xy, 1.0);
@@ -799,4 +801,28 @@ FragmentOutput fragmentMain(VertexOutput input) {
   // Ray direction visualization
   // output.color = float4(0.5 * rayDir + 0.5, 1.0);
   return output;
+}
+
+// Compute shader variant of the renderer. It computes the same image as fragmentMain but writes the result to an output
+// image that is later blitted to the screen. This exists to test whether a compute shader improves performance.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void computeMain(uint3 threadId: SV_DispatchThreadID) {
+  uint width, height;
+  outputImage.GetDimensions(width, height);
+  if (threadId.x >= width || threadId.y >= height)
+    return;
+
+  FragmentOutput output = (FragmentOutput)0;
+
+  float2 fragUv = (float2(threadId.xy) + 0.5) / float2(width, height);
+  float2 uvNdc = fragUv * 2.0 - 1.0;
+  uvNdc.x *= scene.aspect;
+  float z = 1.0 / tan(radians(scene.fov) * 0.5); // Image plane depth
+  float3 rayDirection = normalize(scene.camForward * z + scene.camRight * uvNdc.x + scene.camUp * uvNdc.y);
+
+  renderScene(DynamicObjectsSceneConversion(), output, rayDirection);
+  output.color += gradientNoiseWithStrength(float2(threadId.xy) + 0.5, 1.0);
+
+  outputImage[threadId.xy] = output.color;
 }

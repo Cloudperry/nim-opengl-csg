@@ -5,6 +5,7 @@ description = "A computer graphics project in Nim and OpenGL"
 srcDir = "src"
 binDir = "bin"
 namedBin["SdfRenderer"] = "sdf-renderer"
+namedBin["SdfRendererCompute"] = "sdf-renderer-compute"
 backend = "c"
 license = "MIT"
 
