@@ -1,4 +1,5 @@
-import std/[os, strformat, strutils, options, math, monotimes, sequtils, importutils, sugar]
+import
+  std/[os, strformat, strutils, options, math, monotimes, sequtils, importutils, sugar]
 import std/times except `getTime`
 import pkg/[glm, glfw, confutils]
 from pkg/glfw/wrapper import `rawMouseMotionSupported`
@@ -6,10 +7,15 @@ import ./glad/gl
 import GlUtils, Slangc, Scene, Logger, Shapes, SdfScene
 
 type RenderMode {.size: sizeof(uint32).} = enum
-  BasicLitScene, ShadowedLitScene, UnlitScene, DebugNormals, DebugStepCounts
+  BasicLitScene
+  ShadowedLitScene
+  UnlitScene
+  DebugNormals
+  DebugStepCounts
+
 makeGlObjects(RaiseError, std140Alignment):
   type GpuSdfSceneUniforms = object
-    aspect: GLfloat 
+    aspect: GLfloat
     camPos, camForward, camRight, camUp, hitColor, bgColor: Vec3f
     fov: GLfloat
     mainLightDirection, mainLightColor, ambientLightColor: Vec3f
@@ -19,8 +25,7 @@ makeGlObjects(RaiseError, std140Alignment):
     mode: RenderMode
 
 type
-  EngineState = object
-    # Window/input
+  EngineState = object # Window/input
     fullscreen: bool
     monitor: Monitor
     prevWinProps: tuple[x, y, w, h, refreshRate: int]
@@ -31,12 +36,17 @@ type
     camera: RasterizedCamera
     cameraLocked: bool
     lockTime: float32
+
   FrameState = object
     cursorDeltaX, cursorDeltaY, deltaTime: float
+
   SdfRendererScene = enum
-    DynamicObjectsTestRoom, SoftShadowsTest
+    DynamicObjectsTestRoom
+    SoftShadowsTest
+
   ScreenSpaceVertex = object
     pos, uv: Vec2f
+
   # TODO: Move camera data in this object (possibly using the existing camera class, but without rasterization specific stuff).
   # Set uniforms by making a function that uses the camera class data.
   SdfRendererState = object
@@ -54,17 +64,14 @@ type
     dynamicCutter: tuple[outputI: uint8, instI: int]
     movingSphere: tuple[outputI: uint8, instI: int]
     scene: SdfRendererScene
+
   Config* = object # Game settings
     scene* {.
-      name: "scene",
-      defaultValue: DynamicObjectsTestRoom,
-      desc: "Select a scene"
+      name: "scene", defaultValue: DynamicObjectsTestRoom, desc: "Select a scene"
     .}: SdfRendererScene
     # Renderer settings
     slangBinPath* {.
-      name: "slangBinPath",
-      defaultValue: "",
-      desc: "Slang shader compiler binary path"
+      name: "slangBinPath", defaultValue: "", desc: "Slang shader compiler binary path"
     .}: string
     swapInterval* {.
       name: "swapInterval",
@@ -72,34 +79,14 @@ type
       desc: "Controls VSync (0 = VSync off, 1 = VSync on, 2 = half-rate VSync on)"
     .}: int
     useSpirV* {.
-      name: "useSpirV",
-      defaultValue: false,
-      desc: "Use SPIR-V for shader compilation"
+      name: "useSpirV", defaultValue: false, desc: "Use SPIR-V for shader compilation"
     .}: bool
-    camLockX* {.
-      name: "camLockX",
-      defaultValue: 0.0,
-    .}: float32
-    camLockY* {.
-      name: "camLockY",
-      defaultValue: 0.0,
-    .}: float32
-    camLockZ* {.
-      name: "camLockZ",
-      defaultValue: 0.0,
-    .}: float32
-    camLockYaw* {.
-      name: "camLockYaw",
-      defaultValue: 0.0,
-    .}: float32
-    camLockPitch* {.
-      name: "camLockPitch",
-      defaultValue: 0.0,
-    .}: float32
-    lockTime* {.
-      name: "lockTime",
-      defaultValue: -1.0,
-    .}: float32
+    camLockX* {.name: "camLockX", defaultValue: 0.0.}: float32
+    camLockY* {.name: "camLockY", defaultValue: 0.0.}: float32
+    camLockZ* {.name: "camLockZ", defaultValue: 0.0.}: float32
+    camLockYaw* {.name: "camLockYaw", defaultValue: 0.0.}: float32
+    camLockPitch* {.name: "camLockPitch", defaultValue: 0.0.}: float32
+    lockTime* {.name: "lockTime", defaultValue: -1.0.}: float32
 
 const
   shapeColor = vec3f(1.0)
@@ -119,34 +106,54 @@ proc dynamicObjectsScene() =
   sdfRenderer.sceneUbo.ambientLightColor = vec3f(0.01)
   sdfRenderer.sceneUbo.specularExponent = 16
   sdfRenderer.pointLights.add PointLight(
-    position: vec3f(3, 1.5, 3), color: vec3f(0.8, 0.4, 0) / 3,
-    constTerm: 1, linearFalloff: 0.5, expFalloff: 1/20
+    position: vec3f(3, 1.5, 3),
+    color: vec3f(0.8, 0.4, 0) / 3,
+    constTerm: 1,
+    linearFalloff: 0.5,
+    expFalloff: 1 / 20,
   )
   sdfRenderer.pointLights.add PointLight(
-    position: vec3f(-3, 1.5, 3), color: vec3f(0, 0.5, 0.7) / 3,
-    constTerm: 1, linearFalloff: 0.5, expFalloff: 1/20
+    position: vec3f(-3, 1.5, 3),
+    color: vec3f(0, 0.5, 0.7) / 3,
+    constTerm: 1,
+    linearFalloff: 0.5,
+    expFalloff: 1 / 20,
   )
   sdfRenderer.pointLights.add PointLight(
-    position: vec3f(0, 1.5, -5), color: vec3f(0.4, 0.4, 0.4) / 8,
-    constTerm: 1, linearFalloff: 0.5, expFalloff: 1/20
+    position: vec3f(0, 1.5, -5),
+    color: vec3f(0.4, 0.4, 0.4) / 8,
+    constTerm: 1,
+    linearFalloff: 0.5,
+    expFalloff: 1 / 20,
   )
   sdfRenderer.pointLights.upload()
 
-  sdfRenderer.sceneBuilder = initSceneBuilder(sdfRenderer.sceneProgramData.data, sdfRenderer.sceneProgramInputs.data, sdfRenderer.sceneProgram.data)
-  let innerBox = sdfRenderer.sceneBuilder.addRoundBox(vec3f(0, 0, 0), vec3f(9, 3, 9), 0.5).outputI
-  let outerBox = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, 0), vec3f(10, 5, 10)).outputI
-  let windowNorth = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
+  sdfRenderer.sceneBuilder = initSceneBuilder(
+    sdfRenderer.sceneProgramData.data, sdfRenderer.sceneProgramInputs.data,
+    sdfRenderer.sceneProgram.data,
+  )
+  let innerBox =
+    sdfRenderer.sceneBuilder.addRoundBox(vec3f(0, 0, 0), vec3f(9, 3, 9), 0.5).outputI
+  let outerBox =
+    sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, 0), vec3f(10, 5, 10)).outputI
+  let windowNorth =
+    sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
   var room = sdfRenderer.sceneBuilder.cut(innerBox, outerBox).outputI
   sdfRenderer.dynamicCutter = sdfRenderer.sceneBuilder.addBox(vec3f(0), vec3f(1.5))
   room = sdfRenderer.sceneBuilder.cut(windowNorth, room).outputI
   room = sdfRenderer.sceneBuilder.cut(sdfRenderer.dynamicCutter.outputI, room).outputI
   sdfRenderer.movingSphere = sdfRenderer.sceneBuilder.addSphere(vec3f(0, 0, 0), 2)
-  room = sdfRenderer.sceneBuilder.smoothlyCombine(room, sdfRenderer.movingSphere.outputI).outputI
-  let box1 = sdfRenderer.sceneBuilder.addBox(vec3f(0, -2, 6), vec3f(2.5, 1, 2.5)).outputI
-  let roofWindow = sdfRenderer.sceneBuilder.addBox(vec3f(0, 5, 6), vec3f(3, 2.5, 3)).outputI
+  room = sdfRenderer.sceneBuilder.smoothlyCombine(
+    room, sdfRenderer.movingSphere.outputI
+  ).outputI
+  let box1 =
+    sdfRenderer.sceneBuilder.addBox(vec3f(0, -2, 6), vec3f(2.5, 1, 2.5)).outputI
+  let roofWindow =
+    sdfRenderer.sceneBuilder.addBox(vec3f(0, 5, 6), vec3f(3, 2.5, 3)).outputI
   room = sdfRenderer.sceneBuilder.combine(room, box1).outputI
   room = sdfRenderer.sceneBuilder.cut(roofWindow, room).outputI
-  let ground = sdfRenderer.sceneBuilder.addPlane(vec3f(0, -5, 0), vec3f(0, 1, 0), 0).outputI
+  let ground =
+    sdfRenderer.sceneBuilder.addPlane(vec3f(0, -5, 0), vec3f(0, 1, 0), 0).outputI
   discard sdfRenderer.sceneBuilder.combine(room, ground)
   sdfRenderer.sceneProgramData.uploadField(materialData)
 
@@ -169,14 +176,18 @@ proc softShadowsScene() =
   )
   sdfRenderer.pointLights.upload()]#
 
-  sdfRenderer.sceneBuilder = initSceneBuilder(sdfRenderer.sceneProgramData.data, sdfRenderer.sceneProgramInputs.data, sdfRenderer.sceneProgram.data)
-  let ground = sdfRenderer.sceneBuilder.addPlane(vec3f(0, -5, 0), vec3f(0, 1, 0), 0).outputI
+  sdfRenderer.sceneBuilder = initSceneBuilder(
+    sdfRenderer.sceneProgramData.data, sdfRenderer.sceneProgramInputs.data,
+    sdfRenderer.sceneProgram.data,
+  )
+  let ground =
+    sdfRenderer.sceneBuilder.addPlane(vec3f(0, -5, 0), vec3f(0, 1, 0), 0).outputI
   let box1 = sdfRenderer.sceneBuilder.addBox(vec3f(-5, -1, 0), vec3f(2, 4, 2)).outputI
-  let gb1 = sdfRenderer.sceneBuilder.combine(ground, box1).outputI 
+  let gb1 = sdfRenderer.sceneBuilder.combine(ground, box1).outputI
   let box2 = sdfRenderer.sceneBuilder.addBox(vec3f(0, -2, -5), vec3f(1, 3, 1)).outputI
-  let gb2 = sdfRenderer.sceneBuilder.combine(gb1, box2).outputI 
+  let gb2 = sdfRenderer.sceneBuilder.combine(gb1, box2).outputI
   let box3 = sdfRenderer.sceneBuilder.addBox(vec3f(4, -3, -10), vec3f(1, 2, 1)).outputI
-  discard sdfRenderer.sceneBuilder.combine(gb2, box3).outputI 
+  discard sdfRenderer.sceneBuilder.combine(gb2, box3).outputI
   sdfRenderer.sceneProgramData.uploadField(materialData)
 
 proc initComputeShaderProg(computeSrc: string, useSpirV: bool): ShaderRef =
@@ -187,7 +198,9 @@ proc initComputeShaderProg(computeSrc: string, useSpirV: bool): ShaderRef =
     glCompileShader(computeShader)
   else:
     glShaderBinaryStr(1, addr computeShader, computeSrc)
-    glSpecializeShader(computeShader, "main", 0, cast[ptr GLuint](nil), cast[ptr GLuint](nil))
+    glSpecializeShader(
+      computeShader, "main", 0, cast[ptr GLuint](nil), cast[ptr GLuint](nil)
+    )
   checkErrorAndRaise(computeShader)
   result.id = glCreateProgram()
   glAttachShader(result.id, computeShader)
@@ -210,13 +223,21 @@ proc initOutputTexture(width, height: int32) =
   if sdfRenderer.blitFbo == 0:
     glGenFramebuffers(1, addr sdfRenderer.blitFbo)
   glBindFramebuffer(GL_READ_FRAMEBUFFER, sdfRenderer.blitFbo)
-  glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sdfRenderer.outputTexture, 0)
+  glFramebufferTexture2D(
+    GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sdfRenderer.outputTexture,
+    0,
+  )
   glBindFramebuffer(GL_READ_FRAMEBUFFER, 0)
   sdfRenderer.fbWidth = width
   sdfRenderer.fbHeight = height
 
-proc init(win: Window, useSpirV: bool, cameraLockPos: Vec3f;
-          cameraLockYaw, cameraLockPitch, lockTime: float32, slangToGlslTime: Duration) =
+proc init(
+    win: Window,
+    useSpirV: bool,
+    cameraLockPos: Vec3f,
+    cameraLockYaw, cameraLockPitch, lockTime: float32,
+    slangToGlslTime: Duration,
+) =
   let monitorSize = (state.monitor.workArea.w, state.monitor.workArea.h)
   state.fullscreen = win.size == monitorSize
   (state.prevCursorX, state.prevCursorY) = win.cursorPos
@@ -229,7 +250,8 @@ proc init(win: Window, useSpirV: bool, cameraLockPos: Vec3f;
   state.camera.pitch = cameraLockPitch
   if cameraLockPos != vec3f(0) or (cameraLockYaw, cameraLockPitch) != (0.0'f32, 0.0'f32):
     state.cameraLocked = true
-    (state.camera.forward, state.camera.right, state.camera.up) = state.camera.getLocalDirections()
+    (state.camera.forward, state.camera.right, state.camera.up) =
+      state.camera.getLocalDirections()
   state.lockTime = lockTime
 
   logger = stdout.initLogger()
@@ -243,22 +265,42 @@ proc init(win: Window, useSpirV: bool, cameraLockPos: Vec3f;
   let shaderCompileTotalTime = slangToGlslTime + shaderCompileTime
   logger.log fmt"Shader compilation took {shaderCompileTotalTime.inMicroseconds()} µs " &
     fmt"({slangToGlslTime.inMicroseconds()} µs Slang -> GLSL, {shaderCompileTime.inMicroseconds()} µs GLSL -> GPU native program)"
-  sdfRenderer.sceneUbo = initShaderDataBuffer[GpuSdfSceneUniforms](sdfRenderer.shader, 0, GL_UNIFORM_BUFFER, GL_DYNAMIC_DRAW)
-  sdfRenderer.debugOptUbo = initShaderDataBuffer[DebugSettings](sdfRenderer.shader, 1, GL_UNIFORM_BUFFER, GL_DYNAMIC_DRAW)
+  sdfRenderer.sceneUbo = initShaderDataBuffer[GpuSdfSceneUniforms](
+    sdfRenderer.shader, 0, GL_UNIFORM_BUFFER, GL_DYNAMIC_DRAW
+  )
+  sdfRenderer.debugOptUbo = initShaderDataBuffer[DebugSettings](
+    sdfRenderer.shader, 1, GL_UNIFORM_BUFFER, GL_DYNAMIC_DRAW
+  )
   sdfRenderer.sceneProgramData = initShaderDataBuffer[SdfProgramData](
-    sdfRenderer.shader, 0, GL_SHADER_STORAGE_BUFFER, GL_DYNAMIC_DRAW, data = SdfProgramData().some
+    sdfRenderer.shader,
+    0,
+    GL_SHADER_STORAGE_BUFFER,
+    GL_DYNAMIC_DRAW,
+    data = SdfProgramData().some,
   )
   sdfRenderer.sceneProgramInputs = initShaderDataBuffer[SdfProgramInputs](
-    sdfRenderer.shader, 4, GL_SHADER_STORAGE_BUFFER, GL_DYNAMIC_DRAW, data = SdfProgramInputs().some
+    sdfRenderer.shader,
+    4,
+    GL_SHADER_STORAGE_BUFFER,
+    GL_DYNAMIC_DRAW,
+    data = SdfProgramInputs().some,
   )
   sdfRenderer.sceneProgram = initShaderDataBuffer[seq[SdfInstruction]](
-    sdfRenderer.shader, 1, GL_SHADER_STORAGE_BUFFER, GL_DYNAMIC_DRAW, data = emptySdfProgram().some
+    sdfRenderer.shader,
+    1,
+    GL_SHADER_STORAGE_BUFFER,
+    GL_DYNAMIC_DRAW,
+    data = emptySdfProgram().some,
   )
-  sdfRenderer.pointLights = initShaderDataBuffer[seq[PointLight]](sdfRenderer.shader, 2, GL_SHADER_STORAGE_BUFFER, GL_DYNAMIC_DRAW)
+  sdfRenderer.pointLights = initShaderDataBuffer[seq[PointLight]](
+    sdfRenderer.shader, 2, GL_SHADER_STORAGE_BUFFER, GL_DYNAMIC_DRAW
+  )
 
   case sdfRenderer.scene
-  of DynamicObjectsTestRoom: dynamicObjectsScene()
-  of SoftShadowsTest: softShadowsScene()
+  of DynamicObjectsTestRoom:
+    dynamicObjectsScene()
+  of SoftShadowsTest:
+    softShadowsScene()
 
   initOutputTexture(width.int32, height.int32)
 
@@ -272,7 +314,8 @@ proc uninit() =
 
 proc update(win: Window, frame: var FrameState) =
   let cursorPos = win.cursorPos
-  (frame.cursorDeltaX, frame.cursorDeltaY) = (cursorPos.x - state.prevCursorX, cursorPos.y - state.prevCursorY)
+  (frame.cursorDeltaX, frame.cursorDeltaY) =
+    (cursorPos.x - state.prevCursorX, cursorPos.y - state.prevCursorY)
   (state.prevCursorX, state.prevCursorY) = cursorPos
 
   if not state.cameraLocked:
@@ -291,20 +334,28 @@ proc update(win: Window, frame: var FrameState) =
       moveDirection.y -= 1
 
     state.camera.doFirstPersonCameraMovement(
-      state.cameraOpts, moveDirection, frame.cursorDeltaX, frame.cursorDeltaY, frame.deltaTime
+      state.cameraOpts, moveDirection, frame.cursorDeltaX, frame.cursorDeltaY,
+      frame.deltaTime,
     )
 
   # Update SDF program if dynamic scene
   case sdfRenderer.scene
   of DynamicObjectsTestRoom:
-    let time = if state.lockTime != -1.0: state.lockTime else: glfw.getTime().float32
+    let time =
+      if state.lockTime != -1.0:
+        state.lockTime
+      else:
+        glfw.getTime().float32
     let cutterInst = sdfRenderer.sceneProgram.data[sdfRenderer.dynamicCutter.instI]
     let newX: float32 = sin(time * 0.7) * 10
-    sdfRenderer.sceneProgramInputs.data.args[cutterInst.argsI.uint32] = cast[uint32](newX)
+    sdfRenderer.sceneProgramInputs.data.args[cutterInst.argsI.uint32] =
+      cast[uint32](newX)
     let sphereInst = sdfRenderer.sceneProgram.data[sdfRenderer.movingSphere.instI]
     let newY: float32 = sin(time * 0.4) * 5
-    sdfRenderer.sceneProgramInputs.data.args[sphereInst.argsI.uint32 + 1] = cast[uint32](newY)
-  else: discard
+    sdfRenderer.sceneProgramInputs.data.args[sphereInst.argsI.uint32 + 1] =
+      cast[uint32](newY)
+  else:
+    discard
 
 proc setUniforms(c: RasterizedCamera) =
   sdfRenderer.sceneUbo.camPos = c.pos
@@ -329,7 +380,10 @@ proc draw(win: Window) =
   sdfRenderer.sceneProgram.upload()
 
   # Render the scene into the output texture with the compute shader
-  glBindImageTexture(3.GLuint, sdfRenderer.outputTexture, 0.GLint, false, 0.GLint, GL_WRITE_ONLY, GL_RGBA32F)
+  glBindImageTexture(
+    3.GLuint, sdfRenderer.outputTexture, 0.GLint, false, 0.GLint, GL_WRITE_ONLY,
+    GL_RGBA32F,
+  )
   let groupsX = GLuint((width + 7) div 8)
   let groupsY = GLuint((height + 7) div 8)
   glDispatchCompute(groupsX, groupsY, 1)
@@ -339,30 +393,46 @@ proc draw(win: Window) =
   glBindFramebuffer(GL_READ_FRAMEBUFFER, sdfRenderer.blitFbo)
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0)
   glBlitFramebuffer(
-    0, 0, width.GLint, height.GLint, 0, 0, width.GLint, height.GLint, GL_COLOR_BUFFER_BIT, GL_NEAREST
+    0, 0, width.GLint, height.GLint, 0, 0, width.GLint, height.GLint,
+    GL_COLOR_BUFFER_BIT, GL_NEAREST,
   )
   glBindFramebuffer(GL_READ_FRAMEBUFFER, 0)
 
-proc sizeCb(win: Window, size: tuple[w, h: int32]) = 
+proc sizeCb(win: Window, size: tuple[w, h: int32]) =
   updateCameraAspect(size.w, size.h)
 
-proc keyCb(win: Window, key: Key, scanCode: int32, action: KeyAction, modKeys: set[ModifierKey]) =
+proc keyCb(
+    win: Window, key: Key, scanCode: int32, action: KeyAction, modKeys: set[ModifierKey]
+) =
   if key == keyEscape and action == kaDown:
     win.shouldClose = true
-  elif (key == keyLeftAlt and win.isKeyDown(keyEnter) or
-  key == keyEnter and win.isKeyDown(keyLeftAlt)) and action == kaDown:
+  elif (
+    key == keyLeftAlt and win.isKeyDown(keyEnter) or
+    key == keyEnter and win.isKeyDown(keyLeftAlt)
+  ) and action == kaDown:
     if not state.fullscreen:
       let monitorArea = state.monitor.workArea()
       let monitorMode = state.monitor.videoMode()
-      state.prevWinProps = (win.pos.x, win.pos.y, win.size.w, win.size.h, monitorMode.refreshRate)
+      state.prevWinProps =
+        (win.pos.x, win.pos.y, win.size.w, win.size.h, monitorMode.refreshRate)
       logger.log fmt"Going into fullscreen {(monitorArea.x, monitorArea.y, monitorArea.w, monitorArea.h, monitorMode.refreshRate)}"
-      win.monitor = (state.monitor, monitorArea.x, monitorArea.y, monitorArea.w, monitorArea.h, monitorMode.refreshRate)
+      win.monitor = (
+        state.monitor, monitorArea.x, monitorArea.y, monitorArea.w, monitorArea.h,
+        monitorMode.refreshRate,
+      )
     else:
-      let winProps = (state.prevWinProps.x, state.prevWinProps.y, state.prevWinProps.w, state.prevWinProps.h, state.prevWinProps.refreshRate)
+      let winProps = (
+        state.prevWinProps.x, state.prevWinProps.y, state.prevWinProps.w,
+        state.prevWinProps.h, state.prevWinProps.refreshRate,
+      )
       logger.log fmt"Going out of fullscreen {winProps}"
       win.monitor = (
-        newMonitor(nil), state.prevWinProps.x, state.prevWinProps.y,
-        state.prevWinProps.w, state.prevWinProps.h, state.prevWinProps.refreshRate
+        newMonitor(nil),
+        state.prevWinProps.x,
+        state.prevWinProps.y,
+        state.prevWinProps.w,
+        state.prevWinProps.h,
+        state.prevWinProps.refreshRate,
       )
     state.fullscreen = not state.fullscreen
 
@@ -392,19 +462,22 @@ proc keyCb(win: Window, key: Key, scanCode: int32, action: KeyAction, modKeys: s
 proc positionCb(win: Window, pos: tuple[x, y: int32]) =
   let newMonitor = win.monitor
   privateAccess(newMonitor.type)
-  if newMonitor.handle != nil: # Linux Wayland sometimes gave nil monitors for win.monitor, check that its not nil
+  if newMonitor.handle != nil:
+    # Linux Wayland sometimes gave nil monitors for win.monitor, check that its not nil
     state.monitor = newMonitor
 
 proc compileShaders(useSpirV: bool, slangPath = "") =
   let target = if useSpirV: SpirV else: Glsl
-  let opts =
-    initSlangcOptions(inFile = shadersDir / "SdfRenderer.slang", stage = Compute, target = target)
+  let opts = initSlangcOptions(
+    inFile = shadersDir / "SdfRenderer.slang", stage = Compute, target = target
+  )
   state.computeShaderText = compileShaderOrRaise(opts, slangPath)
   if not useSpirV:
     # Slang spuriously requires this extension for the image size/store built-ins even though they are core in GLSL
     # 4.60. Mesa rejects the (unused) directive in compute shaders, so strip it out.
-    state.computeShaderText =
-      state.computeShaderText.replace("#extension GL_EXT_samplerless_texture_functions : require\n", "")
+    state.computeShaderText = state.computeShaderText.replace(
+      "#extension GL_EXT_samplerless_texture_functions : require\n", ""
+    )
 
 proc initGlfwAndGlad(conf: Config): tuple[win: Window, cfg: OpenglWindowConfig] =
   # GLFW window and OpenGL context init
@@ -456,7 +529,10 @@ proc main() =
 
   var (win, cfg) = initGlfwAndGlad(conf)
   let cameraPos = vec3f(conf.camLockX, conf.camLockY, conf.camLockZ)
-  win.init(conf.useSpirV, cameraPos, conf.camLockYaw, conf.camLockPitch, conf.lockTime, slangToGlslTime)
+  win.init(
+    conf.useSpirV, cameraPos, conf.camLockYaw, conf.camLockPitch, conf.lockTime,
+    slangToGlslTime,
+  )
 
   var frame = FrameState()
   var prevFrameStart = getMonoTime()
@@ -465,16 +541,21 @@ proc main() =
     frame = FrameState()
     let currFrameStart = getMonoTime()
     let frameDuration = currFrameStart - prevFrameStart
-    frame.deltaTime = frameDuration.inNanoseconds() / initDuration(seconds = 1).inNanoseconds()
+    frame.deltaTime =
+      frameDuration.inNanoseconds() / initDuration(seconds = 1).inNanoseconds()
     prevFrameStart = currFrameStart
-    
+
     win.update(frame)
     let updateEnd = getMonoTime()
     win.draw()
     glfw.swapBuffers(win)
 
     let currFrameEnd = getMonoTime()
-    logger.logPerf(updateEnd - currFrameStart, currFrameEnd - updateEnd, currFrameEnd - currFrameStart)
+    logger.logPerf(
+      updateEnd - currFrameStart,
+      currFrameEnd - updateEnd,
+      currFrameEnd - currFrameStart,
+    )
 
     glfw.pollEvents()
 
@@ -484,8 +565,11 @@ proc main() =
   let stats = logger.getStatsForRange(0, 999)
   let fpsAvg = inNanoseconds(initDuration(seconds = 1)) / inNanoseconds(stats.avgFrame)
   let avgFrameUs = inMicroseconds(stats.avgFrame)
-  let (minTime, maxTime) = (inMicroseconds(stats.minFrame), inMicroseconds(stats.maxFrame))
+  let (minTime, maxTime) =
+    (inMicroseconds(stats.minFrame), inMicroseconds(stats.maxFrame))
   let bufferDurationSec = inSeconds(stats.bufferDuration)
-  logger.writeTerminalStatusLine some(&"Performance stats for last {bufferDurationSec} seconds:\n  FPS: {fpsAvg:.1f} ({avgFrameUs} µs), 5% Min/max frametimes: {minTime}/{maxTime} μs")
+  logger.writeTerminalStatusLine some(
+    &"Performance stats for last {bufferDurationSec} seconds:\n  FPS: {fpsAvg:.1f} ({avgFrameUs} µs), 5% Min/max frametimes: {minTime}/{maxTime} μs"
+  )
 
 main()

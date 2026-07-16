@@ -9,16 +9,17 @@ makeGlObjects(RaiseError, std140Alignment):
   type GpuSceneUniforms = object
     cameraPos: Vec3f
     # Just one model to world transform for now, separate transforms for each model will be needed later
-    modelToWorldMat, worldToViewMat, viewToClipMat: Mat4f 
+    modelToWorldMat, worldToViewMat, viewToClipMat: Mat4f
     mainLightDirection: Vec3f
     mainLightColor: Vec3f
     ambientLightColor: Vec3f
 
 type
   RendererMode = enum
-    Rasterizer, SdfRenderer
-  EngineState = object
-    # Window/input
+    Rasterizer
+    SdfRenderer
+
+  EngineState = object # Window/input
     fullscreen: bool
     monitor: Monitor
     prevWinProps: tuple[x, y, w, h, refreshRate: int]
@@ -27,10 +28,11 @@ type
     # Graphics
     vertexShaderText, fragmentShaderText: string
     camera: RasterizedCamera
+
   FrameState = object
     cursorDeltaX, cursorDeltaY, deltaTime: float
-  RasterizerState = object
-    # Renderer state and wrapper objects
+
+  RasterizerState = object # Renderer state and wrapper objects
     shader: ShaderRef
     uniforms: ShaderDataBufferRef[GpuSceneUniforms]
     vertexBuffers: seq[VertexBufferRef[ColoredVertex]]
@@ -47,15 +49,17 @@ var
   logger = Logger()
   rasterizer = RasterizerState()
 
-proc updateCameraAspect(win: Window; width, height: int) =
+proc updateCameraAspect(win: Window, width, height: int) =
   var ratio = width / height
   case state.camera.kind
-  of Perspective: state.camera.setPerspective(
-    state.camera.verticalFov, ratio, state.camera.nearClip, state.camera.farClip
-  )
-  of Orthographic: state.camera.setOrthographic(
-    state.camera.frustumLength, ratio, state.camera.nearClip, state.camera.farClip
-  )
+  of Perspective:
+    state.camera.setPerspective(
+      state.camera.verticalFov, ratio, state.camera.nearClip, state.camera.farClip
+    )
+  of Orthographic:
+    state.camera.setOrthographic(
+      state.camera.frustumLength, ratio, state.camera.nearClip, state.camera.farClip
+    )
 
   glViewport(0, 0, width, height)
 
@@ -66,7 +70,8 @@ proc makeGlBuffers[T](s: Scene[T]) =
 
   for i, model in s.models:
     rasterizer.vertexBuffers[i] = initVertexBuffer (model.vertices, GL_STATIC_DRAW).some
-    rasterizer.elementBuffers[i] = initElementBuffer (model.indices, GL_STATIC_DRAW).some
+    rasterizer.elementBuffers[i] =
+      initElementBuffer (model.indices, GL_STATIC_DRAW).some
     rasterizer.vertexArrays[i] = initVertexArray()
     rasterizer.vertexArrays[i].use()
     rasterizer.vertexBuffers[i].use()
@@ -94,13 +99,19 @@ proc init(win: Window, useSpirV: bool) =
     pyramid = makePyramid(shapeColor)
     sphere = makeSphere(0.5, 16, 16, shapeColor)
     cubeModel = initModel(
-      cube.vertices, cube.indices, transform = Transform(pos: vec3f(0, 0, -2), scale: vec3f(1, 1, 1))
+      cube.vertices,
+      cube.indices,
+      transform = Transform(pos: vec3f(0, 0, -2), scale: vec3f(1, 1, 1)),
     )
     pyramidModel = initModel(
-      pyramid.vertices, pyramid.indices, transform = Transform(pos: vec3f(-2, 0, -2), scale: vec3f(1, 1, 1))
+      pyramid.vertices,
+      pyramid.indices,
+      transform = Transform(pos: vec3f(-2, 0, -2), scale: vec3f(1, 1, 1)),
     )
     sphereModel = initModel(
-      sphere.vertices, sphere.indices, transform = Transform(pos: vec3f(2, 0, -2), scale: vec3f(1, 1, 1))
+      sphere.vertices,
+      sphere.indices,
+      transform = Transform(pos: vec3f(2, 0, -2), scale: vec3f(1, 1, 1)),
     )
 
   let (width, height) = glfw.framebufferSize(win)
@@ -109,17 +120,22 @@ proc init(win: Window, useSpirV: bool) =
   rasterizer.scene = initScene(
     state.camera,
     @[cubeModel, pyramidModel, sphereModel],
-    DirectionalLight(direction: vec3f(-5, -5, -3).normalize(), color: vec3f(1, 0.6, 0.3)).some,
-    vec3f(0.1).some
+    DirectionalLight(
+      direction: vec3f(-5, -5, -3).normalize(), color: vec3f(1, 0.6, 0.3)
+    ).some,
+    vec3f(0.1).some,
   )
 
   # Compile and link shader and check errors
   if not useSpirV:
     rasterizer.shader = initShaderProg(state.vertexShaderText, state.fragmentShaderText)
   else:
-    rasterizer.shader = initBinShaderProg(state.vertexShaderText, state.fragmentShaderText)
+    rasterizer.shader =
+      initBinShaderProg(state.vertexShaderText, state.fragmentShaderText)
   # Get used uniforms/attributes. Bare uniforms don't work in Slang so this uses UBOs.
-  rasterizer.uniforms = initShaderDataBuffer[GpuSceneUniforms](rasterizer.shader, 0, GL_UNIFORM_BUFFER, GL_DYNAMIC_DRAW)
+  rasterizer.uniforms = initShaderDataBuffer[GpuSceneUniforms](
+    rasterizer.shader, 0, GL_UNIFORM_BUFFER, GL_DYNAMIC_DRAW
+  )
 
   # Set up OpenGL buffers for passing vertex data to shaders
   rasterizer.scene.makeGlBuffers()
@@ -136,7 +152,8 @@ proc init(win: Window, useSpirV: bool) =
 
 proc update(win: Window, frame: var FrameState) =
   let cursorPos = win.cursorPos
-  (frame.cursorDeltaX, frame.cursorDeltaY) = (cursorPos.x - state.prevCursorX, cursorPos.y - state.prevCursorY)
+  (frame.cursorDeltaX, frame.cursorDeltaY) =
+    (cursorPos.x - state.prevCursorX, cursorPos.y - state.prevCursorY)
   (state.prevCursorX, state.prevCursorY) = cursorPos
 
   # Keyboard input
@@ -155,7 +172,8 @@ proc update(win: Window, frame: var FrameState) =
     moveDirection.y -= 1
 
   state.camera.doFirstPersonCameraMovement(
-    state.cameraOpts, moveDirection, frame.cursorDeltaX, frame.cursorDeltaY, frame.deltaTime
+    state.cameraOpts, moveDirection, frame.cursorDeltaX, frame.cursorDeltaY,
+    frame.deltaTime,
   )
 
 proc uninit() =
@@ -181,31 +199,52 @@ proc draw(win: Window) =
   for i in 0 .. rasterizer.vertexArrays.high:
     rasterizer.vertexArrays[i].use()
     rasterizer.scene.models[i].setUniforms()
-    glDrawElements(GL_TRIANGLES, rasterizer.scene.models[i].indices.len, GL_UNSIGNED_INT, cast[pointer](0))
+    glDrawElements(
+      GL_TRIANGLES,
+      rasterizer.scene.models[i].indices.len,
+      GL_UNSIGNED_INT,
+      cast[pointer](0),
+    )
 
-proc sizeCb(win: Window, size: tuple[w, h: int32]) = win.updateCameraAspect(size.w, size.h)
+proc sizeCb(win: Window, size: tuple[w, h: int32]) =
+  win.updateCameraAspect(size.w, size.h)
 
 proc setUniforms(c: RasterizedCamera) =
   rasterizer.uniforms.worldToViewMat = c.viewMat
   rasterizer.uniforms.viewToClipMat = c.projectionMat
 
-proc keyCb(win: Window, key: Key, scanCode: int32, action: KeyAction, modKeys: set[ModifierKey]) =
+proc keyCb(
+    win: Window, key: Key, scanCode: int32, action: KeyAction, modKeys: set[ModifierKey]
+) =
   if key == keyEscape and action == kaDown:
     win.shouldClose = true
-  elif (key == keyLeftAlt and win.isKeyDown(keyEnter) or
-  key == keyEnter and win.isKeyDown(keyLeftAlt)) and action == kaDown:
+  elif (
+    key == keyLeftAlt and win.isKeyDown(keyEnter) or
+    key == keyEnter and win.isKeyDown(keyLeftAlt)
+  ) and action == kaDown:
     if not state.fullscreen:
       let monitorArea = state.monitor.workArea()
       let monitorMode = state.monitor.videoMode()
-      state.prevWinProps = (win.pos.x, win.pos.y, win.size.w, win.size.h, monitorMode.refreshRate)
+      state.prevWinProps =
+        (win.pos.x, win.pos.y, win.size.w, win.size.h, monitorMode.refreshRate)
       logger.log fmt"Going into fullscreen {(monitorArea.x, monitorArea.y, monitorArea.w, monitorArea.h, monitorMode.refreshRate)}"
-      win.monitor = (state.monitor, monitorArea.x, monitorArea.y, monitorArea.w, monitorArea.h, monitorMode.refreshRate)
+      win.monitor = (
+        state.monitor, monitorArea.x, monitorArea.y, monitorArea.w, monitorArea.h,
+        monitorMode.refreshRate,
+      )
     else:
-      let winProps = (state.prevWinProps.x, state.prevWinProps.y, state.prevWinProps.w, state.prevWinProps.h, state.prevWinProps.refreshRate)
+      let winProps = (
+        state.prevWinProps.x, state.prevWinProps.y, state.prevWinProps.w,
+        state.prevWinProps.h, state.prevWinProps.refreshRate,
+      )
       logger.log fmt"Going out of fullscreen {winProps}"
       win.monitor = (
-        newMonitor(nil), state.prevWinProps.x, state.prevWinProps.y,
-        state.prevWinProps.w, state.prevWinProps.h, state.prevWinProps.refreshRate
+        newMonitor(nil),
+        state.prevWinProps.x,
+        state.prevWinProps.y,
+        state.prevWinProps.w,
+        state.prevWinProps.h,
+        state.prevWinProps.refreshRate,
       )
     state.fullscreen = not state.fullscreen
 
@@ -217,7 +256,8 @@ proc keyCb(win: Window, key: Key, scanCode: int32, action: KeyAction, modKeys: s
 proc positionCb(win: Window, pos: tuple[x, y: int32]) =
   let newMonitor = win.monitor
   privateAccess(newMonitor.type)
-  if newMonitor.handle != nil: # Linux Wayland sometimes gave nil monitors for win.monitor, check that its not nil
+  if newMonitor.handle != nil:
+    # Linux Wayland sometimes gave nil monitors for win.monitor, check that its not nil
     state.monitor = newMonitor
 
 proc compileShaders(useSpirV: bool, slangPath = "") =
@@ -230,7 +270,8 @@ proc compileShaders(useSpirV: bool, slangPath = "") =
     opts.target = SpirV
   opts.stage = Vertex
   opts.inFile = shadersDir / "RasterizedRenderer.slang"
-  if slangPath.len > 0: opts.slangPath = slangPath
+  if slangPath.len > 0:
+    opts.slangPath = slangPath
   state.vertexShaderText = compileShaderOrRaise(opts)
 
   opts.stage = Fragment
@@ -290,16 +331,21 @@ proc main(slangPath = "", useSpirV = false) =
     frame = FrameState()
     let currFrameStart = getMonoTime()
     let frameDuration = currFrameStart - prevFrameStart
-    frame.deltaTime = frameDuration.inNanoseconds() / initDuration(seconds = 1).inNanoseconds()
+    frame.deltaTime =
+      frameDuration.inNanoseconds() / initDuration(seconds = 1).inNanoseconds()
     prevFrameStart = currFrameStart
-    
+
     win.update(frame)
     let updateEnd = getMonoTime()
     win.draw()
     glfw.swapBuffers(win)
 
     let currFrameEnd = getMonoTime()
-    logger.logPerf(updateEnd - currFrameStart, currFrameEnd - updateEnd, currFrameEnd - currFrameStart)
+    logger.logPerf(
+      updateEnd - currFrameStart,
+      currFrameEnd - updateEnd,
+      currFrameEnd - currFrameStart,
+    )
 
     glfw.pollEvents()
   uninit()
