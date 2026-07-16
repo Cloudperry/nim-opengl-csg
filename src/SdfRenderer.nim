@@ -359,21 +359,14 @@ proc positionCb(win: Window, pos: tuple[x, y: int32]) =
     state.monitor = newMonitor
 
 proc compileShaders(useSpirV: bool, slangPath = "") =
-  # TODO: Fields are set using setter procs here to make sure the output file field gets updated. Make the API
-  # in Slangc better by adding init proc.
-  var opts = SlangcOptions(entryPoint: "vertexMain")
-  if not useSpirV:
-    opts.target = Glsl
-  else:
-    opts.target = SpirV
-  opts.stage = Vertex
-  opts.inFile = shadersDir / "SdfRenderer.slang"
-  if slangPath.len > 0: opts.slangPath = slangPath
-  state.vertexShaderText = compileShaderOrRaise(opts)
+  let target = if useSpirV: SpirV else: Glsl
+  let inFile = shadersDir / "SdfRenderer.slang"
 
-  opts.stage = Fragment
-  opts.entryPoint = "fragmentMain"
-  state.fragmentShaderText = compileShaderOrRaise(opts)
+  let vertOpts = initSlangcOptions(inFile = inFile, stage = Vertex, target = target)
+  state.vertexShaderText = compileShaderOrRaise(vertOpts, slangPath)
+
+  let fragOpts = initSlangcOptions(inFile = inFile, stage = Fragment, target = target)
+  state.fragmentShaderText = compileShaderOrRaise(fragOpts, slangPath)
 
 proc initGlfwAndGlad(conf: Config): tuple[win: Window, cfg: OpenglWindowConfig] =
   # GLFW window and OpenGL context init

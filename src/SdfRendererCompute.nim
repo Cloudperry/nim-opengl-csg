@@ -396,17 +396,10 @@ proc positionCb(win: Window, pos: tuple[x, y: int32]) =
     state.monitor = newMonitor
 
 proc compileShaders(useSpirV: bool, slangPath = "") =
-  # TODO: Fields are set using setter procs here to make sure the output file field gets updated. Make the API
-  # in Slangc better by adding init proc.
-  var opts = SlangcOptions(entryPoint: "computeMain")
-  if not useSpirV:
-    opts.target = Glsl
-  else:
-    opts.target = SpirV
-  opts.stage = Compute
-  opts.inFile = shadersDir / "SdfRenderer.slang"
-  if slangPath.len > 0: opts.slangPath = slangPath
-  state.computeShaderText = compileShaderOrRaise(opts)
+  let target = if useSpirV: SpirV else: Glsl
+  let opts =
+    initSlangcOptions(inFile = shadersDir / "SdfRenderer.slang", stage = Compute, target = target)
+  state.computeShaderText = compileShaderOrRaise(opts, slangPath)
   if not useSpirV:
     # Slang spuriously requires this extension for the image size/store built-ins even though they are core in GLSL
     # 4.60. Mesa rejects the (unused) directive in compute shaders, so strip it out.
