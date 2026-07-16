@@ -44,6 +44,7 @@ type
     sceneUbo: ShaderDataBufferRef[GpuSdfSceneUniforms]
     debugOptUbo: ShaderDataBufferRef[DebugSettings]
     sceneProgramData: ShaderDataBufferRef[SdfProgramData]
+    sceneProgramInputs: ShaderDataBufferRef[SdfProgramInputs]
     sceneProgram: ShaderDataBufferRef[seq[SdfInstruction]]
     pointLights: ShaderDataBufferRef[seq[PointLight]]
     sceneBuilder: SceneBuilder
@@ -130,7 +131,7 @@ proc dynamicObjectsScene() =
   )
   sdfRenderer.pointLights.upload()
 
-  sdfRenderer.sceneBuilder = initSceneBuilder(sdfRenderer.sceneProgramData.data, sdfRenderer.sceneProgram.data)
+  sdfRenderer.sceneBuilder = initSceneBuilder(sdfRenderer.sceneProgramData.data, sdfRenderer.sceneProgramInputs.data, sdfRenderer.sceneProgram.data)
   let innerBox = sdfRenderer.sceneBuilder.addRoundBox(vec3f(0, 0, 0), vec3f(9, 3, 9), 0.5).outputI
   let outerBox = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, 0), vec3f(10, 5, 10)).outputI
   let windowNorth = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
@@ -167,7 +168,7 @@ proc softShadowsScene() =
   )
   sdfRenderer.pointLights.upload()]#
 
-  sdfRenderer.sceneBuilder = initSceneBuilder(sdfRenderer.sceneProgramData.data, sdfRenderer.sceneProgram.data)
+  sdfRenderer.sceneBuilder = initSceneBuilder(sdfRenderer.sceneProgramData.data, sdfRenderer.sceneProgramInputs.data, sdfRenderer.sceneProgram.data)
   let ground = sdfRenderer.sceneBuilder.addPlane(vec3f(0, -5, 0), vec3f(0, 1, 0), 0).outputI
   let box1 = sdfRenderer.sceneBuilder.addBox(vec3f(-5, -1, 0), vec3f(2, 4, 2)).outputI
   let gb1 = sdfRenderer.sceneBuilder.combine(ground, box1).outputI 
@@ -212,6 +213,9 @@ proc init(win: Window, useSpirV: bool, cameraLockPos: Vec3f;
   sdfRenderer.debugOptUbo = initShaderDataBuffer[DebugSettings](sdfRenderer.shader, 1, GL_UNIFORM_BUFFER, GL_DYNAMIC_DRAW)
   sdfRenderer.sceneProgramData = initShaderDataBuffer[SdfProgramData](
     sdfRenderer.shader, 0, GL_SHADER_STORAGE_BUFFER, GL_DYNAMIC_DRAW, data = SdfProgramData().some
+  )
+  sdfRenderer.sceneProgramInputs = initShaderDataBuffer[SdfProgramInputs](
+    sdfRenderer.shader, 4, GL_SHADER_STORAGE_BUFFER, GL_DYNAMIC_DRAW, data = SdfProgramInputs().some
   )
   sdfRenderer.sceneProgram = initShaderDataBuffer[seq[SdfInstruction]](
     sdfRenderer.shader, 1, GL_SHADER_STORAGE_BUFFER, GL_DYNAMIC_DRAW, data = emptySdfProgram().some
@@ -271,10 +275,10 @@ proc update(win: Window, frame: var FrameState) =
     let time = if state.lockTime != -1.0: state.lockTime else: glfw.getTime().float32
     let cutterInst = sdfRenderer.sceneProgram.data[sdfRenderer.dynamicCutter.instI]
     let newX: float32 = sin(time * 0.7) * 10
-    sdfRenderer.sceneProgramData.data.args[cutterInst.argsI.uint32] = cast[uint32](newX)
+    sdfRenderer.sceneProgramInputs.data.args[cutterInst.argsI.uint32] = cast[uint32](newX)
     let sphereInst = sdfRenderer.sceneProgram.data[sdfRenderer.movingSphere.instI]
     let newY: float32 = sin(time * 0.4) * 5
-    sdfRenderer.sceneProgramData.data.args[sphereInst.argsI.uint32 + 1] = cast[uint32](newY)
+    sdfRenderer.sceneProgramInputs.data.args[sphereInst.argsI.uint32 + 1] = cast[uint32](newY)
   else: discard
 
 proc setUniforms(c: RasterizedCamera) =
@@ -298,7 +302,7 @@ proc draw(win: Window) =
   state.camera.setUniforms()
 
   sdfRenderer.imagePlaneVao.use()
-  sdfRenderer.sceneProgramData.uploadField(args)
+  sdfRenderer.sceneProgramInputs.uploadField(args)
   sdfRenderer.sceneProgram.upload()
   glDrawArrays(GL_TRIANGLES, 0, 6)
 

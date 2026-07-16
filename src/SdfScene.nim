@@ -22,6 +22,7 @@ makeSsbo:
   type
     SdfProgramData* = object
       materialData*: array[256, Material]
+    SdfProgramInputs* = object
       args*: seq[uint32]
     SdfInstruction* = object
       kind*: SdfInstructionKind
@@ -44,10 +45,11 @@ type
     outputSlotUsage: array[maxOutputSlots, Option[int]]
     nextOutputI: uint8 = 0
     data: ref SdfProgramData
+    inputs: ref SdfProgramInputs
     instructions: ref seq[SdfInstruction]
 
-proc initSceneBuilder*(data: ref SdfProgramData, instructions: ref seq[SdfInstruction]): SceneBuilder =
-  SceneBuilder(data: data, instructions: instructions)
+proc initSceneBuilder*(data: ref SdfProgramData, inputs: ref SdfProgramInputs, instructions: ref seq[SdfInstruction]): SceneBuilder =
+  SceneBuilder(data: data, inputs: inputs, instructions: instructions)
 
 # TODO: Split to different functions for shapes and operators to make the fn call signature less messy
 proc makeInsn(
@@ -69,7 +71,7 @@ template makeUintArgs(arr: untyped) =
   let args {.inject.} = cast[array[arr.len, uint32]](arr)
 
 proc addArgs(prog: var SceneBuilder, args: openArray[uint32]) =
-  prog.data.args &= args
+  prog.inputs.args &= args
   prog.nextArgI += args.len.uint16
 
 # This is broken but why?

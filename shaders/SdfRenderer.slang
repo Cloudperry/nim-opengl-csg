@@ -66,17 +66,8 @@ struct Material {
   (data) [(idx) + 1] = asuint((val).y);                                                                                \
   (data) [(idx) + 2] = asuint((val).z)
 
-// TODO: Add a special SDF program type for emissive shapes. In this program there are only shape instructions and the
-// distances are not saved to output slots. Instead the shapes are evaluated one by one and their light contributions
-// are summed up to a final light. This avoids the slowness of traversing the whole scene SDF program just to get the
-// light contribution from emissives. One problem to solve with this approach is how to get the emissive surface to be
-// correctly lit, since its physical geometric shape is now separate from the emission evaluation.
-
 struct SdfProgramData {
   Material materialData[256];
-  // If this shader is ever used for a Windows game, this runtime-sized array needs to be replaced. AMD OpenGL drivers
-  // fail to link the shader if a dynamic array is used in an SSBO. Zink and GLonD3D12 work, but are unusably slow.
-  uint args[];
 }
 
 // For complex CSG trees, this can be increased to at least 20 or 30 without destroying performance.
@@ -131,6 +122,9 @@ StructuredBuffer<SdfProgramData> sdfProgData;
 StructuredBuffer<SdfInstruction> sdfProg;
 [[vk::binding(2)]]
 StructuredBuffer<PointLight> pointLights;
+// SDF program inputs moved into their own dynamically sized SSBO, because having them as a dynamic array inside sdfProgData is problematic with newer Slang versions and most OpenGL drivers.
+[[vk::binding(4)]]
+StructuredBuffer<uint> sdfProgArgs;
 [[vk::binding(3)]]
 RWTexture2D<float4> outputImage;
 
@@ -198,7 +192,7 @@ float evalSmoothAddOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData) {
   float k;
   d1 = READ_FLOAT(runtimeData.outputs, insn.runtimeArgsI());
   d2 = READ_FLOAT(runtimeData.outputs, insn.runtimeArgsI() + 1);
-  k = READ_FLOAT(sdfProgData[0].args, insn.argsI());
+  k = READ_FLOAT(sdfProgArgs, insn.argsI());
   return opSmoothUnion(d1, d2, k);
 }
 [ForceInline]
@@ -208,7 +202,7 @@ float evalSmoothSubOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData) {
   float k;
   d1 = READ_FLOAT(runtimeData.outputs, insn.runtimeArgsI());
   d2 = READ_FLOAT(runtimeData.outputs, insn.runtimeArgsI() + 1);
-  k = READ_FLOAT(sdfProgData[0].args, insn.argsI());
+  k = READ_FLOAT(sdfProgArgs, insn.argsI());
   return opSmoothSubtraction(d1, d2, k);
 }
 [ForceInline]
@@ -218,7 +212,7 @@ float evalSmoothInterOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData) 
   float k;
   d1 = READ_FLOAT(runtimeData.outputs, insn.runtimeArgsI());
   d2 = READ_FLOAT(runtimeData.outputs, insn.runtimeArgsI() + 1);
-  k = READ_FLOAT(sdfProgData[0].args, insn.argsI());
+  k = READ_FLOAT(sdfProgArgs, insn.argsI());
   return opSmoothIntersection(d1, d2, k);
 }
 
@@ -227,16 +221,16 @@ float evalSmoothInterOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData) 
 float evalSphere(SdfInstruction insn, float3 rayP) {
   float3 p;
   float r;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  r = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 3);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  r = READ_FLOAT(sdfProgArgs, insn.argsI() + 3);
   return sdSphere(rayP - p, r);
 }
 [ForceInline]
 float evalBox(SdfInstruction insn, float3 rayP) {
   float3 p;
   float3 halfExtent;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  halfExtent = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 3);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  halfExtent = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
   return sdBox(rayP - p, halfExtent);
 }
 [ForceInline]
@@ -244,9 +238,9 @@ float evalRoundBox(SdfInstruction insn, float3 rayP) {
   float3 p;
   float3 halfExtent;
   float r;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  halfExtent = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 3);
-  r = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 6);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  halfExtent = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
+  r = READ_FLOAT(sdfProgArgs, insn.argsI() + 6);
   return sdRoundBox(rayP - p, halfExtent, r);
 }
 [ForceInline]
@@ -254,9 +248,9 @@ float evalBoxFrame(SdfInstruction insn, float3 rayP) {
   float3 p;
   float3 b;
   float e;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  b = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 3);
-  e = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 6);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  b = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
+  e = READ_FLOAT(sdfProgArgs, insn.argsI() + 6);
   return sdBoxFrame(rayP - p, b, e);
 }
 [ForceInline]
@@ -264,9 +258,9 @@ float evalCone(SdfInstruction insn, float3 rayP) {
   float3 p;
   float2 c;
   float h;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  c = READ_FLOAT2(sdfProgData[0].args, insn.argsI() + 3);
-  h = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 5);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  c = READ_FLOAT2(sdfProgArgs, insn.argsI() + 3);
+  h = READ_FLOAT(sdfProgArgs, insn.argsI() + 5);
   return sdCone(rayP - p, c, h);
 }
 [ForceInline]
@@ -276,27 +270,27 @@ float evalCappedCone(SdfInstruction insn, float3 rayP) {
   float3 b;
   float ra;
   float rb;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  a = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 3);
-  b = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 6);
-  ra = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 9);
-  rb = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 10);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  a = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
+  b = READ_FLOAT3(sdfProgArgs, insn.argsI() + 6);
+  ra = READ_FLOAT(sdfProgArgs, insn.argsI() + 9);
+  rb = READ_FLOAT(sdfProgArgs, insn.argsI() + 10);
   return sdCappedCone(rayP - p, a, b, ra, rb);
 }
 [ForceInline]
 float evalHexPrism(SdfInstruction insn, float3 rayP) {
   float3 p;
   float2 h;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  h = READ_FLOAT2(sdfProgData[0].args, insn.argsI() + 3);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  h = READ_FLOAT2(sdfProgArgs, insn.argsI() + 3);
   return sdHexPrism(rayP - p, h);
 }
 [ForceInline]
 float evalTriPrism(SdfInstruction insn, float3 rayP) {
   float3 p;
   float2 h;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  h = READ_FLOAT2(sdfProgData[0].args, insn.argsI() + 3);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  h = READ_FLOAT2(sdfProgArgs, insn.argsI() + 3);
   return sdTriPrism(rayP - p, h);
 }
 [ForceInline]
@@ -305,10 +299,10 @@ float evalCapsule(SdfInstruction insn, float3 rayP) {
   float3 a;
   float3 b;
   float r;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  a = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 3);
-  b = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 6);
-  r = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 9);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  a = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
+  b = READ_FLOAT3(sdfProgArgs, insn.argsI() + 6);
+  r = READ_FLOAT(sdfProgArgs, insn.argsI() + 9);
   return sdCapsule(rayP - p, a, b, r);
 }
 [ForceInline]
@@ -317,10 +311,10 @@ float evalCappedCylinder(SdfInstruction insn, float3 rayP) {
   float3 a;
   float3 b;
   float r;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  a = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 3);
-  b = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 6);
-  r = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 9);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  a = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
+  b = READ_FLOAT3(sdfProgArgs, insn.argsI() + 6);
+  r = READ_FLOAT(sdfProgArgs, insn.argsI() + 9);
   return sdCappedCylinder(rayP - p, a, b, r);
 }
 [ForceInline]
@@ -329,10 +323,10 @@ float evalRoundedCylinder(SdfInstruction insn, float3 rayP) {
   float ra;
   float rb;
   float h;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  ra = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 3);
-  rb = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 4);
-  h = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 5);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  ra = READ_FLOAT(sdfProgArgs, insn.argsI() + 3);
+  rb = READ_FLOAT(sdfProgArgs, insn.argsI() + 4);
+  h = READ_FLOAT(sdfProgArgs, insn.argsI() + 5);
   return sdRoundedCylinder(rayP - p, ra, rb, h);
 }
 [ForceInline]
@@ -340,25 +334,25 @@ float evalCutSphere(SdfInstruction insn, float3 rayP) {
   float3 p;
   float r;
   float h;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  r = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 3);
-  h = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 4);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  r = READ_FLOAT(sdfProgArgs, insn.argsI() + 3);
+  h = READ_FLOAT(sdfProgArgs, insn.argsI() + 4);
   return sdCutSphere(rayP - p, r, h);
 }
 [ForceInline]
 float evalOctahedron(SdfInstruction insn, float3 rayP) {
   float3 p;
   float s;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  s = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 3);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  s = READ_FLOAT(sdfProgArgs, insn.argsI() + 3);
   return sdOctahedron(rayP - p, s);
 }
 [ForceInline]
 float evalPyramid(SdfInstruction insn, float3 rayP) {
   float3 p;
   float h;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  h = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 3);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  h = READ_FLOAT(sdfProgArgs, insn.argsI() + 3);
   return sdPyramid(rayP - p, h);
 }
 [ForceInline]
@@ -367,10 +361,10 @@ float evalTriangle(SdfInstruction insn, float3 rayP) {
   float3 a;
   float3 b;
   float3 c;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  a = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 3);
-  b = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 6);
-  c = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 9);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  a = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
+  b = READ_FLOAT3(sdfProgArgs, insn.argsI() + 6);
+  c = READ_FLOAT3(sdfProgArgs, insn.argsI() + 9);
   return udTriangle(rayP - p, a, b, c);
 }
 [ForceInline]
@@ -380,11 +374,11 @@ float evalQuad(SdfInstruction insn, float3 rayP) {
   float3 b;
   float3 c;
   float3 d;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  a = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 3);
-  b = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 6);
-  c = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 9);
-  d = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 12);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  a = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
+  b = READ_FLOAT3(sdfProgArgs, insn.argsI() + 6);
+  c = READ_FLOAT3(sdfProgArgs, insn.argsI() + 9);
+  d = READ_FLOAT3(sdfProgArgs, insn.argsI() + 12);
   return udQuad(rayP - p, a, b, c, d);
 }
 [ForceInline]
@@ -392,14 +386,14 @@ float evalPlane(SdfInstruction insn, float3 rayP) {
   float3 p;
   float3 n;
   float h;
-  p = READ_FLOAT3(sdfProgData[0].args, insn.argsI());
-  n = READ_FLOAT3(sdfProgData[0].args, insn.argsI() + 3);
-  h = READ_FLOAT(sdfProgData[0].args, insn.argsI() + 6);
+  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
+  n = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
+  h = READ_FLOAT(sdfProgArgs, insn.argsI() + 6);
   return sdPlane(rayP - p, n, h);
 }
 
 // NOTE: Making an interpreter specialized for right-leaning trees might have better performance?
-struct SdfProgramSceneNoMaterials : IFloatSdfScene {
+struct SdfProgramScene : IFloatSdfScene {
   static float sdf(float3 p) {
     uint insnCount, stride;
     sdfProg.GetDimensions(insnCount, stride);
@@ -793,7 +787,7 @@ FragmentOutput fragmentMain(VertexOutput input) {
   float z = 1.0 / tan(radians(scene.fov) * 0.5); // Image plane depth
   float3 rayDirection = normalize(scene.camForward * z + scene.camRight * uvNdc.x + scene.camUp * uvNdc.y);
 
-  renderScene(DynamicObjectsSceneConversion(), output, rayDirection);
+  renderScene(SdfProgramScene(), output, rayDirection);
   // NOTE: Add a toggle for this in case someone uses this renderer on a display that has built-in dithering. That could
   // cause visible interference patterns between the two types of dithering.
   output.color += gradientNoiseWithStrength(input.fragCoord.xy, 1.0);
