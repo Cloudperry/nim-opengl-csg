@@ -70,6 +70,9 @@ type
       name: "scene", defaultValue: DynamicObjectsTestRoom, desc: "Select a scene"
     .}: SdfRendererScene
     # Renderer settings
+    renderMode* {.
+      name: "renderMode", defaultValue: BasicLitScene, desc: "Initial shading/debug mode"
+    .}: RenderMode
     slangBinPath* {.
       name: "slangBinPath", defaultValue: "", desc: "Slang shader compiler binary path"
     .}: string
@@ -102,26 +105,26 @@ proc updateCameraAspect(width, height: int) =
 
 proc dynamicObjectsScene() =
   sdfRenderer.sceneUbo.mainLightDirection = vec3f(-5, -5, -3).normalize()
-  sdfRenderer.sceneUbo.mainLightColor = vec3f(0.6, 0.3, 0.2) / 12
-  sdfRenderer.sceneUbo.ambientLightColor = vec3f(0.01)
+  sdfRenderer.sceneUbo.mainLightColor = vec3f(0.9, 0.82, 0.7) / 6
+  sdfRenderer.sceneUbo.ambientLightColor = vec3f(0.08)
   sdfRenderer.sceneUbo.specularExponent = 16
   sdfRenderer.pointLights.add PointLight(
     position: vec3f(3, 1.5, 3),
-    color: vec3f(0.8, 0.4, 0) / 3,
+    color: vec3f(0.9, 0.78, 0.62),
     constTerm: 1,
     linearFalloff: 0.5,
     expFalloff: 1 / 20,
   )
   sdfRenderer.pointLights.add PointLight(
     position: vec3f(-3, 1.5, 3),
-    color: vec3f(0, 0.5, 0.7) / 3,
+    color: vec3f(0.64, 0.8, 0.9) / 2,
     constTerm: 1,
     linearFalloff: 0.5,
     expFalloff: 1 / 20,
   )
   sdfRenderer.pointLights.add PointLight(
     position: vec3f(0, 1.5, -5),
-    color: vec3f(0.4, 0.4, 0.4) / 8,
+    color: vec3f(0.8, 0.86, 1.0) / 2,
     constTerm: 1,
     linearFalloff: 0.5,
     expFalloff: 1 / 20,
@@ -132,6 +135,8 @@ proc dynamicObjectsScene() =
     sdfRenderer.sceneProgramData.data, sdfRenderer.sceneProgramInputs.data,
     sdfRenderer.sceneProgram.data,
   )
+  let palette = sdfRenderer.sceneBuilder.addDefaultPalette()
+  sdfRenderer.sceneBuilder.useMaterial(palette.wall)
   let innerBox =
     sdfRenderer.sceneBuilder.addRoundBox(vec3f(0, 0, 0), vec3f(9, 3, 9), 0.5).outputI
   let outerBox =
@@ -142,16 +147,20 @@ proc dynamicObjectsScene() =
   sdfRenderer.dynamicCutter = sdfRenderer.sceneBuilder.addBox(vec3f(0), vec3f(1.5))
   room = sdfRenderer.sceneBuilder.cut(windowNorth, room).outputI
   room = sdfRenderer.sceneBuilder.cut(sdfRenderer.dynamicCutter.outputI, room).outputI
+  sdfRenderer.sceneBuilder.useMaterial(palette.ball)
   sdfRenderer.movingSphere = sdfRenderer.sceneBuilder.addSphere(vec3f(0, 0, 0), 2)
   room = sdfRenderer.sceneBuilder.smoothlyCombine(
     room, sdfRenderer.movingSphere.outputI
   ).outputI
+  sdfRenderer.sceneBuilder.useMaterial(palette.stone)
   let box1 =
     sdfRenderer.sceneBuilder.addBox(vec3f(0, -2, 6), vec3f(2.5, 1, 2.5)).outputI
+  sdfRenderer.sceneBuilder.useMaterial(palette.wall)
   let roofWindow =
     sdfRenderer.sceneBuilder.addBox(vec3f(0, 5, 6), vec3f(3, 2.5, 3)).outputI
   room = sdfRenderer.sceneBuilder.combine(room, box1).outputI
   room = sdfRenderer.sceneBuilder.cut(roofWindow, room).outputI
+  sdfRenderer.sceneBuilder.useMaterial(palette.stone)
   let ground =
     sdfRenderer.sceneBuilder.addPlane(vec3f(0, -5, 0), vec3f(0, 1, 0), 0).outputI
   discard sdfRenderer.sceneBuilder.combine(room, ground)
@@ -533,6 +542,7 @@ proc main() =
     conf.useSpirV, cameraPos, conf.camLockYaw, conf.camLockPitch, conf.lockTime,
     slangToGlslTime,
   )
+  sdfRenderer.debugOptUbo.mode = conf.renderMode
 
   var frame = FrameState()
   var prevFrameStart = getMonoTime()

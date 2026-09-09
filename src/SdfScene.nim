@@ -32,7 +32,7 @@ type
     Plane
 
   Material* = object
-    color: Vec3f
+    color*: Vec3f
     metalness: GLfloat
 
   # A distinct type could be used to give extra type safety for material, argument and runtime data indices. Its a bit annoying though,
@@ -64,6 +64,8 @@ const maxOutputSlots = 10
 # TODO: Add a better API for dynamically changing existing shapes and instructions (low priority)
 type SceneBuilder* = object
   nextArgI: uint16 = 0
+  materialCount: int = 1
+  currentMaterial: uint8 = 0
   # This holds the index of the instruction that wrote in the slot, if the result hasn't been used yet
   outputSlotUsage: array[maxOutputSlots, Option[int]]
   nextOutputI: uint8 = 0
@@ -76,7 +78,32 @@ proc initSceneBuilder*(
     inputs: ref SdfProgramInputs,
     instructions: ref seq[SdfInstruction],
 ): SceneBuilder =
+  data.materialData[0] = Material(color: vec3f(1))
   SceneBuilder(data: data, inputs: inputs, instructions: instructions)
+
+proc addMaterial*(prog: var SceneBuilder, color: Vec3f): uint8 =
+  ## Registers a linear RGB color. Slot zero is the default white material.
+  for channel in 0 .. 2:
+    if not (color[channel] >= 0 and color[channel] <= 1):
+      raise newException(ValueError, "Material color components must be in [0, 1]")
+  if prog.materialCount >= prog.data.materialData.len:
+    raise newException(ValueError, "SDF material table is full (256 materials)")
+  result = prog.materialCount.uint8
+  prog.data.materialData[result] = Material(color: color)
+  inc prog.materialCount
+
+proc useMaterial*(prog: var SceneBuilder, materialI: uint8) =
+  ## Applies to subsequent primitives; CSG operations inherit their inputs' colors.
+  if materialI.int >= prog.materialCount:
+    raise newException(ValueError, "SDF material index has not been registered")
+  prog.currentMaterial = materialI
+
+proc addDefaultPalette*(prog: var SceneBuilder): tuple[wall, stone, ball: uint8] =
+  (
+    wall: prog.addMaterial(vec3f(0.72, 0.66, 0.55)),
+    stone: prog.addMaterial(vec3f(0.45, 0.32, 0.20)),
+    ball: prog.addMaterial(vec3f(0.075, 0.36, 0.045)),
+  )
 
 # TODO: Split to different functions for shapes and operators to make the fn call signature less messy
 proc makeInsn(
@@ -129,13 +156,16 @@ proc addInsnWithOutput(
   prog.outputSlotUsage[i.outputI] = instI.some
 
   result = (i.outputI, instI)
-  prog.instructions[].add i
+  var instruction = i
+  if instruction.kind >= Sphere:
+    instruction.materialI = prog.currentMaterial
+  prog.instructions[].add instruction
   prog.nextOutputI += 1
   prog.nextOutputI = prog.nextOutputI mod maxOutputSlots
 
   # TODO: Replace with logger?
   when defined(showSdfInstructions):
-    echo fmt"Instruction {prog.instructions[].high}: {i}"
+    echo fmt"Instruction {prog.instructions[].high}: {instruction}"
 
 #[
 Code that was used to test slot overwrite protection:

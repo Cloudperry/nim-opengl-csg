@@ -3,6 +3,9 @@ module Sdf;
 public interface IFloatSdfScene {
 	static float sdf(float3 p);
 }
+public interface IColoredFloatSdfScene : IFloatSdfScene {
+	static float3 surfaceColor(float3 p);
+}
 public interface IDifferentiableFloatSdfScene {
 	[Differentiable]
 	static float sdf(float3 p);

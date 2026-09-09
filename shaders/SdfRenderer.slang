@@ -3,7 +3,7 @@ import Lighting;
 import SdfTestScenes;
 
 struct SceneUniforms {
-  // TODO: Move hitColor and specularExponent to material properties. For now they are scene-global.
+  // hitColor is a global tint; specularExponent is still scene-global.
   // TODO: Add point lights
   float aspect;
   float3 camPos, camForward, camRight, camUp, hitColor, bgColor;
@@ -73,7 +73,7 @@ struct SdfProgramData {
 // For complex CSG trees, this can be increased to at least 20 or 30 without destroying performance.
 struct SdfProgramRuntimeData {
   float outputs[10];
-  uint matIOutputs[10];
+  float3 colors[10];
 }
 
 [ForceInline]
@@ -393,12 +393,14 @@ float evalPlane(SdfInstruction insn, float3 rayP) {
 }
 
 // NOTE: Making an interpreter specialized for right-leaning trees might have better performance?
-struct SdfProgramScene : IFloatSdfScene {
-  static float sdf(float3 p) {
+struct SdfProgramScene : IColoredFloatSdfScene {
+  // Specialization keeps material work out of marching, normals and shadow rays.
+  static float evaluate<let withColor : bool>(float3 p, out float3 color) {
     uint insnCount, stride;
     sdfProg.GetDimensions(insnCount, stride);
     SdfProgramRuntimeData runtimeData = { 0 };
-    float res;
+    float res = float.maxValue;
+    color = float3(1);
     for (uint i = 0; i < insnCount; i++) {
       SdfInstruction insn = sdfProg[i];
 
@@ -477,10 +479,63 @@ struct SdfProgramScene : IFloatSdfScene {
         break;
       }
 
+      if (withColor) {
+        if (insn.kind() >= SdfInstructionKind.Sphere) {
+          color = sdfProgData[0].materialData[insn.materialI()].color;
+        } else {
+          uint a = insn.runtimeArgsI();
+          uint b = a + 1;
+          float d1 = runtimeData.outputs[a];
+          float d2 = runtimeData.outputs[b];
+          float weight = 0;
+          switch (insn.kind()) {
+          case SdfInstructionKind.AddOp:
+            weight = d1 <= d2 ? 1 : 0;
+            break;
+          case SdfInstructionKind.SubOp:
+            weight = -d1 >= d2 ? 1 : 0;
+            break;
+          case SdfInstructionKind.InterOp:
+            weight = d1 >= d2 ? 1 : 0;
+            break;
+          case SdfInstructionKind.XorOp:
+            // Follow the same min/max branches as opXor, including inside overlaps.
+            weight = min(d1, d2) >= -max(d1, d2)
+              ? (d1 <= d2 ? 1 : 0) : (d1 >= d2 ? 1 : 0);
+            break;
+          case SdfInstructionKind.SmoothSubOp:
+            d2 = -d2;
+            // fall through to the smooth minimum used by opSmoothSubtraction
+          case SdfInstructionKind.SmoothAddOp: {
+            float k = READ_FLOAT(sdfProgArgs, insn.argsI()) * 4.0;
+            weight = saturate(0.5 + (d2 - d1) / (2.0 * k));
+            break;
+          }
+          case SdfInstructionKind.SmoothInterOp: {
+            float k = READ_FLOAT(sdfProgArgs, insn.argsI()) * 4.0;
+            weight = saturate(0.5 + (d1 - d2) / (2.0 * k));
+            break;
+          }
+          }
+          color = lerp(runtimeData.colors[b], runtimeData.colors[a], weight);
+        }
+        runtimeData.colors[insn.outputI()] = color;
+      }
       runtimeData.outputs[insn.outputI()] = res;
     }
 
     return res;
+  }
+
+  static float sdf(float3 p) {
+    float3 unusedColor;
+    return evaluate<false>(p, unusedColor);
+  }
+
+  static float3 surfaceColor(float3 p) {
+    float3 color;
+    evaluate<true>(p, color);
+    return color;
   }
 }
 
@@ -687,7 +742,7 @@ float sphereTraceShadowSeb<T>(T sceneFn, float3 startPos, float3 rayDir, float w
 }
 
 void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
-  where T : IFloatSdfScene {
+  where T : IColoredFloatSdfScene {
   // Lighting is hardcoded for now
 
   float rayDist, lastStepLen;
@@ -700,14 +755,17 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
       hitPos - (lastStepLen * rayDirection); // TODO: Try to fix normal artifacts by moving this far enough that the
                                              // normal epsilon won't take any of the samples inside the shape?
     float3 worldNormal = calcNormal(sceneFn, safePos);
+    float3 hitColor = scene.hitColor;
+    if (debugOpt.mode != RenderMode.DebugNormals && debugOpt.mode != RenderMode.DebugStepCounts)
+      hitColor *= sceneFn.surfaceColor(hitPos);
 
     switch (debugOpt.mode) {
     case RenderMode.BasicLitScene: {
-      output.color = float4(scene.ambientLightColor * scene.hitColor, 1.0);
+      output.color = float4(scene.ambientLightColor * hitColor, 1.0);
       float3 dirToLight = -scene.mainLightDirection;
-      output.color.xyz += lambertDiffuse(dirToLight, worldNormal, scene.mainLightColor, scene.hitColor);
+      output.color.xyz += lambertDiffuse(dirToLight, worldNormal, scene.mainLightColor, hitColor);
       output.color.xyz += blinnPhongSpecular(dirToLight, worldNormal, rayDirection, scene.mainLightColor,
-                                             scene.hitColor, scene.specularExponent);
+                                             hitColor, scene.specularExponent);
 
       uint lightCount, stride;
       pointLights.GetDimensions(lightCount, stride);
@@ -715,9 +773,9 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
         let pointLight = pointLights[i];
         let dirToLight = normalize(pointLight.position - hitPos);
         float3 lightColor = pointLight.getIntensity(hitPos);
-        output.color.xyz += lambertDiffuse(dirToLight, worldNormal, lightColor, scene.hitColor);
+        output.color.xyz += lambertDiffuse(dirToLight, worldNormal, lightColor, hitColor);
         output.color.xyz +=
-          blinnPhongSpecular(dirToLight, worldNormal, rayDirection, lightColor, scene.hitColor, scene.specularExponent);
+          blinnPhongSpecular(dirToLight, worldNormal, rayDirection, lightColor, hitColor, scene.specularExponent);
       }
       return;
     }
@@ -725,7 +783,7 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
       const float shadowSoftness = 1.0 / 50.0; // Shadow softness as radian angle. Smaller is sharper.
       const float secondaryRayNudgeDist =
         0.05; // How far to 'nudge' the secondary ray's starting point away from surface
-      float3 ambientColor = scene.ambientLightColor * scene.hitColor;
+      float3 ambientColor = scene.ambientLightColor * hitColor;
       output.color = float4(ambientColor, 1.0);
 
       // Directional light
@@ -733,9 +791,9 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
       // Use hitPos + 10 * stepLen * worldNormal here for an interesting/nice looking glitch effect
       let lightContribution = sphereTraceShadowSeb(sceneFn, hitPos + secondaryRayNudgeDist * worldNormal, dirToLight,
                                                    shadowSoftness, rayDist, lastStepLen, stepCount);
-      float3 diffuseColor = lambertDiffuse(dirToLight, worldNormal, scene.mainLightColor, scene.hitColor);
+      float3 diffuseColor = lambertDiffuse(dirToLight, worldNormal, scene.mainLightColor, hitColor);
       float3 specularColor = blinnPhongSpecular(dirToLight, worldNormal, rayDirection, scene.mainLightColor,
-                                                scene.hitColor, scene.specularExponent);
+                                                hitColor, scene.specularExponent);
       output.color.xyz += lightContribution * (diffuseColor + specularColor);
 
       // Point lights
@@ -750,8 +808,8 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
           let lightContribution =
             sphereTraceShadowSeb(sceneFn, hitPos + secondaryRayNudgeDist * worldNormal, dirToLight, shadowSoftness,
                                  rayDist, lastStepLen, stepCount, length(vecToLight));
-          float3 diffuseColor = lambertDiffuse(dirToLight, worldNormal, lightColor, scene.hitColor);
-          float3 specularColor = blinnPhongSpecular(dirToLight, worldNormal, rayDirection, lightColor, scene.hitColor,
+          float3 diffuseColor = lambertDiffuse(dirToLight, worldNormal, lightColor, hitColor);
+          float3 specularColor = blinnPhongSpecular(dirToLight, worldNormal, rayDirection, lightColor, hitColor,
                                                     scene.specularExponent);
           output.color.xyz += lightContribution * (diffuseColor + specularColor);
         }
@@ -759,7 +817,7 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
       return;
     }
     case RenderMode.UnlitScene:
-      output.color = float4(scene.hitColor, 1.0);
+      output.color = float4(hitColor, 1.0);
       return;
     case RenderMode.DebugNormals:
       output.color = float4(worldNormal, 1.0);
@@ -815,7 +873,7 @@ void computeMain(uint3 threadId: SV_DispatchThreadID) {
   float z = 1.0 / tan(radians(scene.fov) * 0.5); // Image plane depth
   float3 rayDirection = normalize(scene.camForward * z + scene.camRight * uvNdc.x + scene.camUp * uvNdc.y);
 
-  renderScene(DynamicObjectsSceneConversion(), output, rayDirection);
+  renderScene(SdfProgramScene(), output, rayDirection);
   output.color += gradientNoiseWithStrength(float2(threadId.xy) + 0.5, 1.0);
 
   outputImage[threadId.xy] = output.color;
