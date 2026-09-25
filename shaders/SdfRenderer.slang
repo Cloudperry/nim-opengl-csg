@@ -681,49 +681,30 @@ Optional<float3> sphereTrace<T>(T sceneFn, float3 startPos, float3 rayDir, out f
   return none;
 }
 
-static const uint secondaryRayMaxSteps = 64;
+static const uint secondaryRayMaxSteps = 128;
 
-// Soft shadows using Sebastian Aaltonen's improved technique (GDC 2018 / Inigo Quilez lsKcDD).
-// Triangulates the closest point of approach between consecutive march steps to eliminate
-// penumbra banding artifacts caused by discrete sphere-tracing steps.
-float sphereTraceShadow<T>(T sceneFn, float3 startPos, float3 rayDir, float shadowSoftness, out float rayDist,
-                           out float closestSurface, out uint stepCount, float farClipDist = 100.0)
+// Soft shadows using Sebastian Aaltonen's technique from https://iquilezles.org/articles/rmshadows/
+float sphereTraceShadow<T>(T sceneFn, float3 startPos, float3 rayDir, float w, out float rayDist,
+                              out float closestSurface, out uint stepCount, float farClipDist = 100)
   where T : IFloatSdfScene {
-  const float mint = 0.01;
-  const float baseHitEps = 0.001;
-  float res = 1.0;
+  const float hitEps = 0.005;
+  float res = 1;
+  rayDist = 0;
   float prevClosestSurface = 1e20;
-  rayDist = mint;
-
   for (stepCount = 0; stepCount < secondaryRayMaxSteps && rayDist <= farClipDist; stepCount++) {
     closestSurface = sceneFn.sdf(startPos + rayDir * rayDist);
 
-    if (closestSurface < baseHitEps)
-      return 0.0;
+    if (closestSurface < hitEps)
+      return 0;
 
-    // Aaltonen soft shadow triangulation with guard against non-Euclidean CSG steps
-    float y = (stepCount == 0 || closestSurface >= 2.0 * prevClosestSurface)
-                ? 0.0
-                : (closestSurface * closestSurface) / (2.0 * prevClosestSurface);
-    float d = sqrt(max(0.0, closestSurface * closestSurface - y * y));
-    res = min(res, d / (shadowSoftness * max(0.0001, rayDist - y)));
-
-    if (res < 0.001)
-      return 0.0;
-
+    float y = closestSurface * closestSurface / (2 * prevClosestSurface);
+    float d = sqrt(closestSurface * closestSurface - y * y);
+    res = min(res, d / (w * max(0, rayDist - y)));
     prevClosestSurface = closestSurface;
     rayDist += closestSurface;
   }
 
-  return saturate(res);
-}
-
-// Backward-compatible alias
-[ForceInline]
-float sphereTraceShadowSeb<T>(T sceneFn, float3 startPos, float3 rayDir, float w, out float rayDist,
-                              out float closestSurface, out uint stepCount, float farClipDist = 100.0)
-  where T : IFloatSdfScene {
-  return sphereTraceShadow(sceneFn, startPos, rayDir, w, rayDist, closestSurface, stepCount, farClipDist);
+  return res;
 }
 
 void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
