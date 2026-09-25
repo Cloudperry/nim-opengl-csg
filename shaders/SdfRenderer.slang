@@ -3,10 +3,9 @@ import Lighting;
 import SdfTestScenes;
 
 struct SceneUniforms {
-  // hitColor is a global tint; specularExponent is still scene-global.
   // TODO: Add point lights
   float aspect;
-  float3 camPos, camForward, camRight, camUp, hitColor, bgColor;
+  float3 camPos, camForward, camRight, camUp, bgColor;
   float fov;
   float3 mainLightDirection, mainLightColor, ambientLightColor;
   float specularExponent;
@@ -733,17 +732,15 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
 
   float rayDist, lastStepLen;
   uint stepCount;
-  var hitOpt = sphereTrace(sceneFn, scene.camPos, rayDirection, rayDist, lastStepLen, stepCount);
-  if (hitOpt.hasValue) {
-    let hitPos = hitOpt.value;
+  var rayHit = sphereTrace(sceneFn, scene.camPos, rayDirection, rayDist, lastStepLen, stepCount);
+  if (rayHit.hasValue) {
+    let hitPos = rayHit.value;
     // NOTE: Using doubles to calculate normals could make shimmering normals at edges much rarer
     float3 safePos =
       hitPos - (lastStepLen * rayDirection); // TODO: Try to fix normal artifacts by moving this far enough that the
                                              // normal epsilon won't take any of the samples inside the shape?
     float3 worldNormal = calcNormal(sceneFn, safePos);
-    float3 hitColor = scene.hitColor;
-    if (debugOpt.mode != RenderMode.DebugNormals && debugOpt.mode != RenderMode.DebugStepCounts)
-      hitColor *= sceneFn.surfaceColor(hitPos);
+    float3 hitColor = sceneFn.surfaceColor(hitPos);
 
     switch (debugOpt.mode) {
     case RenderMode.BasicLitScene: {
