@@ -24,7 +24,7 @@ type RenderMode {.size: sizeof(uint32).} = enum
 makeGlObjects(RaiseError, std140Alignment):
   type GpuSdfSceneUniforms = object
     aspect: GLfloat
-    camPos, camForward, camRight, camUp, hitColor, bgColor: Vec3f
+    camPos, camForward, camRight, camUp, bgColor: Vec3f
     fov: GLfloat
     mainLightDirection, mainLightColor, ambientLightColor: Vec3f
     specularExponent: GLfloat
@@ -381,7 +381,6 @@ proc draw(win: Window) =
   sdfRenderer.shader.use()
   sdfRenderer.sceneUbo.use(sdfRenderer.shader)
   sdfRenderer.sceneUbo.aspect = width / height
-  sdfRenderer.sceneUbo.hitColor = vec3f(1, 1, 1)
   sdfRenderer.sceneUbo.bgColor = vec3f(0.2, 0.3, 0.3)
   sdfRenderer.sceneUbo.fov = 80
   state.camera.setUniforms()
