@@ -98,11 +98,12 @@ proc useMaterial*(prog: var SceneBuilder, materialI: uint8) =
     raise newException(ValueError, "SDF material index has not been registered")
   prog.currentMaterial = materialI
 
-proc addDefaultPalette*(prog: var SceneBuilder): tuple[wall, stone, ball: uint8] =
+proc addDefaultPalette*(prog: var SceneBuilder): tuple[wall, stone, ball, wood: uint8] =
   (
     wall: prog.addMaterial(vec3f(0.72, 0.66, 0.55)),
     stone: prog.addMaterial(vec3f(0.45, 0.32, 0.20)),
-    ball: prog.addMaterial(vec3f(0.075, 0.36, 0.045)),
+    ball: prog.addMaterial(vec3f(0.06, 0.82, 0.70)),
+    wood: prog.addMaterial(vec3f(0.50, 0.26, 0.12)),
   )
 
 # TODO: Split to different functions for shapes and operators to make the fn call signature less messy

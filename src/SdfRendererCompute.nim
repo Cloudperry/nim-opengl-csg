@@ -110,21 +110,21 @@ proc dynamicObjectsScene() =
   sdfRenderer.sceneUbo.specularExponent = 16
   sdfRenderer.pointLights.add PointLight(
     position: vec3f(3, 1.5, 3),
-    color: vec3f(0.9, 0.78, 0.62),
+    color: vec3f(1.0, 0.55, 0.15),
     constTerm: 1,
     linearFalloff: 0.5,
     expFalloff: 1 / 20,
   )
   sdfRenderer.pointLights.add PointLight(
     position: vec3f(-3, 1.5, 3),
-    color: vec3f(0.64, 0.8, 0.9) / 2,
+    color: vec3f(0.95, 0.90, 0.42),
     constTerm: 1,
     linearFalloff: 0.5,
     expFalloff: 1 / 20,
   )
   sdfRenderer.pointLights.add PointLight(
     position: vec3f(0, 1.5, -5),
-    color: vec3f(0.8, 0.86, 1.0) / 2,
+    color: vec3f(0.30, 0.60, 1.0),
     constTerm: 1,
     linearFalloff: 0.5,
     expFalloff: 1 / 20,
@@ -152,7 +152,7 @@ proc dynamicObjectsScene() =
   room = sdfRenderer.sceneBuilder.smoothlyCombine(
     room, sdfRenderer.movingSphere.outputI
   ).outputI
-  sdfRenderer.sceneBuilder.useMaterial(palette.stone)
+  sdfRenderer.sceneBuilder.useMaterial(palette.wood)
   let box1 =
     sdfRenderer.sceneBuilder.addBox(vec3f(0, -2, 6), vec3f(2.5, 1, 2.5)).outputI
   sdfRenderer.sceneBuilder.useMaterial(palette.wall)
