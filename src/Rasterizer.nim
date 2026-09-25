@@ -1,9 +1,17 @@
 import std/[os, strformat, options, math, monotimes, sequtils, importutils, sugar]
 import std/times except `getTime`
-import pkg/[glm, glfw, cligen]
-from pkg/glfw/wrapper import `rawMouseMotionSupported`
+import pkg/[glm, cligen]
+import sdl3
 import ./glad/gl
 import GlUtils, Slangc, Scene, Logger, Shapes, SdfScene
+
+proc glGetProc(name: cstring): pointer {.cdecl.} =
+  glGetProcAddress(name)
+
+proc getFramebufferSize*(win: Window): tuple[w, h: int] =
+  var w, h: cint
+  discard getWindowSizeInPixels(win, w, h)
+  return (w.int, h.int)
 
 makeGlObjects(RaiseError, std140Alignment):
   type GpuSceneUniforms = object
@@ -21,13 +29,11 @@ type
 
   EngineState = object # Window/input
     fullscreen: bool
-    monitor: Monitor
-    prevWinProps: tuple[x, y, w, h, refreshRate: int]
     cameraOpts: FpCameraOptions
-    prevCursorX, prevCursorY: float
     # Graphics
     vertexShaderText, fragmentShaderText: string
     camera: RasterizedCamera
+    shouldClose: bool
 
   FrameState = object
     cursorDeltaX, cursorDeltaY, deltaTime: float
@@ -49,7 +55,7 @@ var
   logger = Logger()
   rasterizer = RasterizerState()
 
-proc updateCameraAspect(win: Window, width, height: int) =
+proc updateCameraAspect(width, height: int) =
   var ratio = width / height
   case state.camera.kind
   of Perspective:
@@ -83,9 +89,7 @@ proc setSceneUniforms[T](s: Scene[T]) =
   rasterizer.uniforms.ambientLightColor = s.ambientLightColor
 
 proc init(win: Window, useSpirV: bool) =
-  let monitorSize = (state.monitor.workArea.w, state.monitor.workArea.h)
-  state.fullscreen = win.size == monitorSize
-  (state.prevCursorX, state.prevCursorY) = win.cursorPos
+  state.fullscreen = (getWindowFlags(win) and WINDOW_FULLSCREEN) != 0
 
   # Set camera options to defaults. Mouse sensitivity is fast on a gaming mouse, but might be too slow for a normal mouse.
   state.cameraOpts = FpCameraOptions()
@@ -114,8 +118,8 @@ proc init(win: Window, useSpirV: bool) =
       transform = Transform(pos: vec3f(2, 0, -2), scale: vec3f(1, 1, 1)),
     )
 
-  let (width, height) = glfw.framebufferSize(win)
-  win.updateCameraAspect(width, height)
+  let (width, height) = getFramebufferSize(win)
+  updateCameraAspect(width, height)
 
   rasterizer.scene = initScene(
     state.camera,
@@ -151,24 +155,20 @@ proc init(win: Window, useSpirV: bool) =
   glDepthFunc(GL_LESS)
 
 proc update(win: Window, frame: var FrameState) =
-  let cursorPos = win.cursorPos
-  (frame.cursorDeltaX, frame.cursorDeltaY) =
-    (cursorPos.x - state.prevCursorX, cursorPos.y - state.prevCursorY)
-  (state.prevCursorX, state.prevCursorY) = cursorPos
-
-  # Keyboard input
+  var numKeys: cint
+  let keyState = getKeyboardState(numKeys)
   var moveDirection = vec3f(0)
-  if win.isKeyDown(keyComma):
+  if keyState[SCANCODE_COMMA.int] or keyState[SCANCODE_W.int]:
     moveDirection.z -= 1
-  elif win.isKeyDown(keyO):
+  elif keyState[SCANCODE_O.int] or keyState[SCANCODE_S.int]:
     moveDirection.z += 1
-  if win.isKeyDown(keyE):
+  if keyState[SCANCODE_E.int] or keyState[SCANCODE_D.int]:
     moveDirection.x += 1
-  elif win.isKeyDown(keyA):
+  elif keyState[SCANCODE_A.int]:
     moveDirection.x -= 1
-  if win.isKeyDown(keySpace):
+  if keyState[SCANCODE_SPACE.int]:
     moveDirection.y += 1
-  elif win.isKeyDown(keyBackslash):
+  elif keyState[SCANCODE_BACKSLASH.int] or keyState[SCANCODE_LSHIFT.int]:
     moveDirection.y -= 1
 
   state.camera.doFirstPersonCameraMovement(
@@ -187,7 +187,10 @@ proc uninit() =
 proc setUniforms(m: Model) =
   rasterizer.uniforms.modelToWorldMat = m.transform.getTransformMat()
 
-proc setUniforms(c: RasterizedCamera)
+proc setUniforms(c: RasterizedCamera) =
+  rasterizer.uniforms.worldToViewMat = c.viewMat
+  rasterizer.uniforms.viewToClipMat = c.projectionMat
+
 proc draw(win: Window) =
   glClearColor(0.2, 0.3, 0.3, 1.0)
   glClear(GL_COLOR_BUFFER_BIT or GL_DEPTH_BUFFER_BIT)
@@ -206,128 +209,65 @@ proc draw(win: Window) =
       cast[pointer](0),
     )
 
-proc sizeCb(win: Window, size: tuple[w, h: int32]) =
-  win.updateCameraAspect(size.w, size.h)
-
-proc setUniforms(c: RasterizedCamera) =
-  rasterizer.uniforms.worldToViewMat = c.viewMat
-  rasterizer.uniforms.viewToClipMat = c.projectionMat
-
-proc keyCb(
-    win: Window, key: Key, scanCode: int32, action: KeyAction, modKeys: set[ModifierKey]
-) =
-  if key == keyEscape and action == kaDown:
-    win.shouldClose = true
-  elif (
-    key == keyLeftAlt and win.isKeyDown(keyEnter) or
-    key == keyEnter and win.isKeyDown(keyLeftAlt)
-  ) and action == kaDown:
-    if not state.fullscreen:
-      let monitorArea = state.monitor.workArea()
-      let monitorMode = state.monitor.videoMode()
-      state.prevWinProps =
-        (win.pos.x, win.pos.y, win.size.w, win.size.h, monitorMode.refreshRate)
-      logger.log fmt"Going into fullscreen {(monitorArea.x, monitorArea.y, monitorArea.w, monitorArea.h, monitorMode.refreshRate)}"
-      win.monitor = (
-        state.monitor, monitorArea.x, monitorArea.y, monitorArea.w, monitorArea.h,
-        monitorMode.refreshRate,
-      )
-    else:
-      let winProps = (
-        state.prevWinProps.x, state.prevWinProps.y, state.prevWinProps.w,
-        state.prevWinProps.h, state.prevWinProps.refreshRate,
-      )
-      logger.log fmt"Going out of fullscreen {winProps}"
-      win.monitor = (
-        newMonitor(nil),
-        state.prevWinProps.x,
-        state.prevWinProps.y,
-        state.prevWinProps.w,
-        state.prevWinProps.h,
-        state.prevWinProps.refreshRate,
-      )
+proc handleKeyDown(win: Window, scancode: Scancode, keymod: Keymod) =
+  if scancode == SCANCODE_ESCAPE:
+    state.shouldClose = true
+  elif (scancode == SCANCODE_RETURN and (keymod and KMOD_ALT) != 0) or
+       (scancode == SCANCODE_LALT and (keymod and KMOD_SHIFT) != 0):
     state.fullscreen = not state.fullscreen
-
-  # TODO: Camera is not getting updated using the window size callback on fullscreen. This is a hack to update it.
-  # Find out why size callbacks don't fire on fullscreen.
-  let (width, height) = glfw.framebufferSize(win)
-  win.updateCameraAspect(width, height)
-
-proc positionCb(win: Window, pos: tuple[x, y: int32]) =
-  let newMonitor = win.monitor
-  privateAccess(newMonitor.type)
-  if newMonitor.handle != nil:
-    # Linux Wayland sometimes gave nil monitors for win.monitor, check that its not nil
-    state.monitor = newMonitor
+    discard setWindowFullscreen(win, state.fullscreen)
+    let (width, height) = getFramebufferSize(win)
+    updateCameraAspect(width, height)
 
 proc compileShaders(useSpirV: bool, slangPath = "") =
-  # TODO: Fields are set using setter procs here to make sure the output file field gets updated. Make the API
-  # in Slangc better by adding init proc.
-  var opts = SlangcOptions(entryPoint: "vertexMain")
-  if not useSpirV:
-    opts.target = Glsl
-  else:
-    opts.target = SpirV
-  opts.stage = Vertex
-  opts.inFile = shadersDir / "RasterizedRenderer.slang"
-  if slangPath.len > 0:
-    opts.slangPath = slangPath
-  state.vertexShaderText = compileShaderOrRaise(opts)
+  let target = if useSpirV: SpirV else: Glsl
+  let inFile = shadersDir / "RasterizedRenderer.slang"
+  let vertOpts = initSlangcOptions(inFile = inFile, stage = Vertex, entryPoint = "vertexMain", target = target)
+  state.vertexShaderText = compileShaderOrRaise(vertOpts, slangPath)
 
-  opts.stage = Fragment
-  opts.entryPoint = "fragmentMain"
-  state.fragmentShaderText = compileShaderOrRaise(opts)
+  let fragOpts = initSlangcOptions(inFile = inFile, stage = Fragment, entryPoint = "fragmentMain", target = target)
+  state.fragmentShaderText = compileShaderOrRaise(fragOpts, slangPath)
 
-proc initGlfwAndGlad(): tuple[win: Window, cfg: OpenglWindowConfig] =
-  # GLFW window and OpenGL context init
-  glfw.initialize()
-  var cfg = DefaultOpenglWindowConfig
-  cfg.size = (w: 640, h: 480)
-  cfg.title = "Simple example"
-  cfg.resizable = true
-  cfg.version = glv46
-  cfg.forwardCompat = true
-  cfg.profile = opCoreProfile
-  cfg.debugContext = not (defined(release) or defined(danger))
-  cfg.bits.depth = 24.some
+proc initSdlAndGlad(): tuple[win: Window, glCtx: GLContext] =
+  if not init(INIT_VIDEO):
+    quit fmt"Error initialising SDL3: {getError()}"
 
-  # GLFW init that has to be done after window creation
-  var win = newWindow(cfg)
-  if not gladLoadGL(getProcAddress):
-    quit "Error initialising OpenGL"
-  if cfg.debugContext: # Enable debug logging when using an OpenGL debug context
-    #[
-    This proc probably needs to be global for it to not cause a segfault as the logger proc
-    let glDebugLoggerProc: LoggerProc = proc (msg: string) =
-      logger.log msg
-    setGlDebugLoggerProc glDebugLoggerProc
-    ]#
+  discard glSetAttribute(GL_CONTEXT_MAJOR_VERSION, 4)
+  discard glSetAttribute(GL_CONTEXT_MINOR_VERSION, 6)
+  discard glSetAttribute(GL_CONTEXT_PROFILE_MASK, GL_CONTEXT_PROFILE_CORE.cint)
+  discard glSetAttribute(GL_DEPTH_SIZE, 24)
+
+  var contextFlags = GL_CONTEXT_FORWARD_COMPATIBLE_FLAG.cint
+  when not (defined(release) or defined(danger)):
+    contextFlags = contextFlags or GL_CONTEXT_DEBUG_FLAG.cint
+  discard glSetAttribute(GL_CONTEXT_FLAGS, contextFlags)
+
+  let win = createWindow("Simple example", 1280, 720, WINDOW_OPENGL or WINDOW_RESIZABLE)
+  if win == nil:
+    quit fmt"Error creating SDL3 window: {getError()}"
+  let glCtx = glCreateContext(win)
+  if glCtx == nil:
+    quit fmt"Error creating OpenGL context: {getError()}"
+
+  if not gladLoadGL(glGetProc):
+    quit "Error initialising OpenGL via glad"
+
+  when not (defined(release) or defined(danger)):
     setupGlDebugLogging()
 
-  win.keyCb = keyCb
-  win.windowSizeCb = sizeCb
-  win.windowPositionCb = positionCb
-  win.aspectRatio = (3, 2)
-  win.cursorMode = cmDisabled
-  state.monitor = getPrimaryMonitor()
-
-  if rawMouseMotionSupported() != 0:
-    win.rawMouseMotion = true
-  else:
-    logger.log "Raw mouse motion not supported. Camera rotation speed will be dependent on desktop mouse settings."
-
-  glfw.swapInterval(1)
-  return (win, cfg)
+  discard setWindowRelativeMouseMode(win, true)
+  discard glSetSwapInterval(1)
+  return (win, glCtx)
 
 proc main(slangPath = "", useSpirV = false) =
   compileShaders(useSpirV, slangPath)
 
-  var (win, cfg) = initGlfwAndGlad()
+  var (win, glCtx) = initSdlAndGlad()
   win.init(useSpirV)
 
   var frame = FrameState()
   var prevFrameStart = getMonoTime()
-  while not win.shouldClose:
+  while not state.shouldClose:
     frame = FrameState()
     let currFrameStart = getMonoTime()
     let frameDuration = currFrameStart - prevFrameStart
@@ -335,10 +275,26 @@ proc main(slangPath = "", useSpirV = false) =
       frameDuration.inNanoseconds() / initDuration(seconds = 1).inNanoseconds()
     prevFrameStart = currFrameStart
 
+    var event: Event
+    while pollEvent(event):
+      case event.type:
+      of EVENT_QUIT:
+        state.shouldClose = true
+      of EVENT_WINDOW_PIXEL_SIZE_CHANGED, EVENT_WINDOW_RESIZED:
+        let (w, h) = getFramebufferSize(win)
+        updateCameraAspect(w, h)
+      of EVENT_MOUSE_MOTION:
+        frame.cursorDeltaX += event.motion.xrel.float
+        frame.cursorDeltaY += event.motion.yrel.float
+      of EVENT_KEY_DOWN:
+        handleKeyDown(win, event.key.scancode, event.key.`mod`)
+      else:
+        discard
+
     win.update(frame)
     let updateEnd = getMonoTime()
     win.draw()
-    glfw.swapBuffers(win)
+    discard glSwapWindow(win)
 
     let currFrameEnd = getMonoTime()
     logger.logPerf(
@@ -347,9 +303,9 @@ proc main(slangPath = "", useSpirV = false) =
       currFrameEnd - currFrameStart,
     )
 
-    glfw.pollEvents()
   uninit()
-  glfw.terminate()
+  discard glDestroyContext(glCtx)
+  destroyWindow(win)
 
 when isMainModule:
   dispatch main
