@@ -21,6 +21,7 @@
 
 # Ignore Nimble generated files
 nimble.paths
+config.nims
 
 # Ignore folder used for building release archives for the game
 releases/
