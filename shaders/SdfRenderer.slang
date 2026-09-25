@@ -682,63 +682,49 @@ Optional<float3> sphereTrace<T>(T sceneFn, float3 startPos, float3 rayDir, out f
   return none;
 }
 
-static const uint secondaryRayMaxSteps = 128;
+static const uint secondaryRayMaxSteps = 64;
 
-// NOTE: Both of the shadowing methods below have banding issues. This is not a problem of the methods and its instead
-// caused by approximate distances when using CSG. Especially the subtraction operator creates problematic SDFs
-// Some operations may be possible to fix by making another SDF bytecode interpreter that implements exact operations,
-// but subtraction can't be fixed to be exact. A general fix for the shadows might be possible by modifying the sphere
-// tracer to get more accurate distances for rays that are near misses. Another fix would be to always create
-// distance-correct SDFs, but that is very hard to do in general.
-
-// Advanced and a bit slow 'close to ground truth' soft shadows (from https://iquilezles.org/articles/rmshadows/). This
-// could probably be a lot faster and more accurate if there was a better way of finding the deepest point inside
-// the shape than taking const sized steps inside. Still has some banding like artifacts, but not easily fixable.
-float sphereTraceShadow<T>(T sceneFn, float3 startPos, float3 rayDir, float w, float surfaceCamDist, out float rayDist,
-                           out float closestSurface, out uint stepCount, float farClipDist = 100)
+// Soft shadows using Sebastian Aaltonen's improved technique (GDC 2018 / Inigo Quilez lsKcDD).
+// Triangulates the closest point of approach between consecutive march steps to eliminate
+// penumbra banding artifacts caused by discrete sphere-tracing steps.
+float sphereTraceShadow<T>(T sceneFn, float3 startPos, float3 rayDir, float shadowSoftness, out float rayDist,
+                           out float closestSurface, out uint stepCount, float farClipDist = 100.0)
   where T : IFloatSdfScene {
-  float res = 1;
-  rayDist = 0;
-  for (stepCount = 0; stepCount < secondaryRayMaxSteps && rayDist <= farClipDist; stepCount++) {
-    closestSurface = sceneFn.sdf(startPos + rayDir * rayDist);
-    res = min(res, closestSurface / (w * rayDist));
-    // Original version: rayDist += clamp(h, 0.005, 0.50);
-    // Having a max bound didn't seem to do anything other than slow down marching for no reason
-    float surfaceDistScaling = max(0.5, surfaceCamDist / 12);
-    // Too big values of the max below cause banding shadow transitions and wobbly shadow edges at super high values.
-    // Too low values are bad for perf and cause weird bright 'reflections' of shapes when up close to a surface.
-    rayDist += max(closestSurface, surfaceDistScaling * 0.035);
-    if (res < -1.0 || rayDist > farClipDist)
-      break;
-  }
-
-  res = max(res, -1.0);
-  return 0.25 * (1.0 + res) * (1.0 + res) * (2.0 - res);
-}
-
-// Soft shadows using Sebastian Aaltonen's technique from https://iquilezles.org/articles/rmshadows/ (didn't work that
-// well)
-float sphereTraceShadowSeb<T>(T sceneFn, float3 startPos, float3 rayDir, float w, out float rayDist,
-                              out float closestSurface, out uint stepCount, float farClipDist = 100)
-  where T : IFloatSdfScene {
-  const float baseHitEps = 0.005;
-  float res = 1;
-  rayDist = 0;
+  const float mint = 0.01;
+  const float baseHitEps = 0.001;
+  float res = 1.0;
   float prevClosestSurface = 1e20;
+  rayDist = mint;
+
   for (stepCount = 0; stepCount < secondaryRayMaxSteps && rayDist <= farClipDist; stepCount++) {
     closestSurface = sceneFn.sdf(startPos + rayDir * rayDist);
 
     if (closestSurface < baseHitEps)
-      return 0;
+      return 0.0;
 
-    float y = closestSurface * closestSurface / (2 * prevClosestSurface);
-    float d = sqrt(closestSurface * closestSurface - y * y);
-    res = min(res, d / (w * max(0, rayDist - y)));
+    // Aaltonen soft shadow triangulation with guard against non-Euclidean CSG steps
+    float y = (stepCount == 0 || closestSurface >= 2.0 * prevClosestSurface)
+                ? 0.0
+                : (closestSurface * closestSurface) / (2.0 * prevClosestSurface);
+    float d = sqrt(max(0.0, closestSurface * closestSurface - y * y));
+    res = min(res, d / (shadowSoftness * max(0.0001, rayDist - y)));
+
+    if (res < 0.001)
+      return 0.0;
+
     prevClosestSurface = closestSurface;
     rayDist += closestSurface;
   }
 
-  return res;
+  return saturate(res);
+}
+
+// Backward-compatible alias
+[ForceInline]
+float sphereTraceShadowSeb<T>(T sceneFn, float3 startPos, float3 rayDir, float w, out float rayDist,
+                              out float closestSurface, out uint stepCount, float farClipDist = 100.0)
+  where T : IFloatSdfScene {
+  return sphereTraceShadow(sceneFn, startPos, rayDir, w, rayDist, closestSurface, stepCount, farClipDist);
 }
 
 void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
@@ -780,17 +766,16 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
       return;
     }
     case RenderMode.ShadowedLitScene: {
-      const float shadowSoftness = 1.0 / 50.0; // Shadow softness as radian angle. Smaller is sharper.
+      const float shadowSoftness = 1.0 / 32.0; // Standard softness parameter (k = 32.0). Smaller is sharper.
       const float secondaryRayNudgeDist =
-        0.05; // How far to 'nudge' the secondary ray's starting point away from surface
+        0.01; // Normal offset to prevent self-shadowing acne
       float3 ambientColor = scene.ambientLightColor * hitColor;
       output.color = float4(ambientColor, 1.0);
 
       // Directional light
       float3 dirToLight = -scene.mainLightDirection;
-      // Use hitPos + 10 * stepLen * worldNormal here for an interesting/nice looking glitch effect
-      let lightContribution = sphereTraceShadowSeb(sceneFn, hitPos + secondaryRayNudgeDist * worldNormal, dirToLight,
-                                                   shadowSoftness, rayDist, lastStepLen, stepCount);
+      let lightContribution = sphereTraceShadow(sceneFn, hitPos + secondaryRayNudgeDist * worldNormal, dirToLight,
+                                                shadowSoftness, rayDist, lastStepLen, stepCount);
       float3 diffuseColor = lambertDiffuse(dirToLight, worldNormal, scene.mainLightColor, hitColor);
       float3 specularColor = blinnPhongSpecular(dirToLight, worldNormal, rayDirection, scene.mainLightColor,
                                                 hitColor, scene.specularExponent);
@@ -806,8 +791,8 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
           let vecToLight = pointLight.position - hitPos;
           let dirToLight = normalize(vecToLight);
           let lightContribution =
-            sphereTraceShadowSeb(sceneFn, hitPos + secondaryRayNudgeDist * worldNormal, dirToLight, shadowSoftness,
-                                 rayDist, lastStepLen, stepCount, length(vecToLight));
+            sphereTraceShadow(sceneFn, hitPos + secondaryRayNudgeDist * worldNormal, dirToLight, shadowSoftness,
+                              rayDist, lastStepLen, stepCount, length(vecToLight));
           float3 diffuseColor = lambertDiffuse(dirToLight, worldNormal, lightColor, hitColor);
           float3 specularColor = blinnPhongSpecular(dirToLight, worldNormal, rayDirection, lightColor, hitColor,
                                                     scene.specularExponent);

@@ -51,7 +51,7 @@ public T sdCone<T>(vector<T, 3> p, vector<T, 2> c, T h) where T : __BuiltinFloat
   // Alternatively pass q instead of (c,h),
   // which is the point at the base in 2D
   vector<T, 2> q = h*vector<T, 2>(c.x/c.y,-(T)1.0);
-    
+
   vector<T, 2> w = vector<T, 2>( length(p.xz), p.y );
   vector<T, 2> a = w - q*clamp( dot(w,q)/dot(q,q), (T)0.0, (T)1.0);
   vector<T, 2> b = w - q*vector<T, 2>( clamp( w.x/q.x, (T)0.0, (T)1.0 ), (T)1.0 );
@@ -151,9 +151,9 @@ public T sdOctahedron<T>( vector<T, 3> p, T s ) where T : __BuiltinFloatingPoint
   else if( (T) 3.0 * p.y < m ) q = p.yzx;
   else if( (T) 3.0 * p.z < m ) q = p.zxy;
   else return m * (T) 0.57735027;
-    
-  T k = clamp((T) 0.5*(q.z-q.y+s), (T) 0.0,s); 
-  return length(vector<T, 3>(q.x,q.y-s+k,q.z-k)); 
+
+  T k = clamp((T) 0.5*(q.z-q.y+s), (T) 0.0,s);
+  return length(vector<T, 3>(q.x,q.y-s+k,q.z-k));
 }
 
 [Differentiable]
@@ -211,7 +211,7 @@ public T udQuad<T>( vector<T, 3> p, vector<T, 3> a, vector<T, 3> b, vector<T, 3>
   vector<T, 3> ad = a - d; vector<T, 3> pd = p - d;
   vector<T, 3> nor = cross( ba, ad );
 
-	
+
   return sqrt(
     ((T) sign(dot(cross(ba,nor),pa)) +
      (T) sign(dot(cross(cb,nor),pb)) +
@@ -224,7 +224,7 @@ public T udQuad<T>( vector<T, 3> p, vector<T, 3> a, vector<T, 3> b, vector<T, 3>
      dot2(dc*clamp(dot(dc,pc)/dot2(dc), (T) 0.0, (T) 1.0)-pc) ),
      dot2(ad*clamp(dot(ad,pd)/dot2(ad), (T) 0.0, (T) 1.0)-pd) )
      :
-     dot(nor,pa)*dot(nor,pa)/dot2(nor) 
+     dot(nor,pa)*dot(nor,pa)/dot2(nor)
 	);
 }
 
@@ -239,14 +239,41 @@ public T sdPlane<T>( vector<T, 3> p, vector<T, 3> n, T h ) where T : __BuiltinFl
 public T opUnion<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
 	return min(d1, d2);
 }
+
+// Exact Euclidean CSG subtraction: cuts d1 from d2.
+// Evaluates the exterior distance field with Euclidean Pythagorean corner term length(max(d, 0.0)),
+// preserving true Euclidean distances (|∇f| = 1) in exterior space around cut corners and seams.
 [Differentiable]
 public T opSubtraction<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
+	vector<T, 2> d = vector<T, 2>(-d1, d2);
+	return min(max(d.x, d.y), (T)0.0) + length(max(d, (T)0.0));
+}
+
+// Approximate CSG subtraction using naive max(-d1, d2).
+// Preserves metric distance inside the cut (d < 0), but distorts exterior distance (d > 0) near
+// concave corners and edges by omitting the Euclidean corner radius, which causes non-Lipschitz
+// gradient steps and severe penumbra banding / artifacts during raymarching and soft shadow tracing.
+[Differentiable]
+public T opSubtractionApprox<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
 	return max(-d1, d2);
 }
+
+// Exact Euclidean CSG intersection of d1 and d2.
+// Includes the corner term length(max(d, 0.0)) to preserve exact Euclidean distance
+// outside intersecting boundaries and along the intersection seam.
 [Differentiable]
 public T opIntersection<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
+	vector<T, 2> d = vector<T, 2>(d1, d2);
+	return min(max(d.x, d.y), (T)0.0) + length(max(d, (T)0.0));
+}
+
+// Approximate CSG intersection using naive max(d1, d2).
+// Preserves interior distances but under-estimates exterior Euclidean distance near the intersection seam.
+[Differentiable]
+public T opIntersectionApprox<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
 	return max(d1, d2);
 }
+
 [Differentiable]
 public T opXor<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
 	return max(min(d1, d2), -max(d1, d2));

@@ -88,6 +88,7 @@ type
     camLockYaw* {.name: "camLockYaw", defaultValue: 0.0.}: float32
     camLockPitch* {.name: "camLockPitch", defaultValue: 0.0.}: float32
     lockTime* {.name: "lockTime", defaultValue: -1.0.}: float32
+    screenshotPath* {.name: "screenshotPath", defaultValue: ""}: string
 
 const
   shapeColor = vec3f(1.0)
@@ -510,6 +511,21 @@ proc main() =
     win.update(frame)
     let updateEnd = getMonoTime()
     win.draw()
+    if conf.screenshotPath.len > 0:
+      let (w, h) = glfw.framebufferSize(win)
+      var pixels = newSeq[uint8](w * h * 3)
+      glPixelStorei(GL_PACK_ALIGNMENT, 1)
+      glReadPixels(0, 0, w.GLsizei, h.GLsizei, GL_RGB, GL_UNSIGNED_BYTE, addr pixels[0])
+      var flipped = newSeq[uint8](w * h * 3)
+      let rowSize = w * 3
+      for y in 0 ..< h:
+        copyMem(addr flipped[y * rowSize], addr pixels[(h - 1 - y) * rowSize], rowSize)
+      let ppmPath = conf.screenshotPath & ".ppm"
+      var f = open(ppmPath, fmWrite)
+      f.write("P6\n" & $w & " " & $h & "\n255\n")
+      discard f.writeBuffer(addr flipped[0], flipped.len)
+      f.close()
+      win.shouldClose = true
     glfw.swapBuffers(win)
 
     let currFrameEnd = getMonoTime()
