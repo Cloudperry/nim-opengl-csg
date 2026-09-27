@@ -10,11 +10,22 @@ type
     Glsl = "glsl"
     SpirV = "spirv"
 
+  ShaderDataLayout* = enum
+    Default = ""                       ## Default slangc layout rules
+    Scalar = "-fvk-use-scalar-layout"  ## Vulkan/GLSL scalar block layout
+    CLayout = "-fvk-use-c-layout"      ## C/C++ structure layout rules for SPIR-V
+    DxLayout = "-fvk-use-dx-layout"    ## FXC member packing rules
+    GlLayout = "-fvk-use-gl-layout"    ## std430 layout for raw buffer load/stores
+
   ## Options for invoking the slangc shader compiler on a single shader file/stage.
   SlangcOptions* = object
     inFile*, entryPoint*, outFile*: string
     target*: TargetFormat = Glsl
     stage*: ShaderStage
+    layout*: ShaderDataLayout = Default
+    profile*: string = ""               ## Optional profile override (e.g. "glsl_460", "spirv_1_5")
+    useEntrypointName*: bool = false    ## If true, passes -fvk-use-entrypoint-name so SPIR-V retains source entry name
+    reflectionJsonFile*: string = ""    ## If non-empty, passes -reflection-json <path>
 
 proc fileExt(t: TargetFormat): string =
   case t
@@ -42,9 +53,22 @@ proc initSlangcOptions*(
     stage: ShaderStage,
     entryPoint = getEntryPoint(stage),
     target = SlangcOptions.default.target,
+    layout = Default,
+    profile = "",
+    useEntrypointName = false,
+    reflectionJsonFile = "",
 ): SlangcOptions =
   result =
-    SlangcOptions(inFile: inFile, entryPoint: entryPoint, target: target, stage: stage)
+    SlangcOptions(
+      inFile: inFile,
+      entryPoint: entryPoint,
+      target: target,
+      stage: stage,
+      layout: layout,
+      profile: profile,
+      useEntrypointName: useEntrypointName,
+      reflectionJsonFile: reflectionJsonFile,
+    )
   result.updateOutputFilename()
 
 proc `inFile=`*(o: var SlangcOptions, path: string) =
@@ -59,30 +83,70 @@ proc `stage=`*(o: var SlangcOptions, s: ShaderStage) =
   o.stage = s
   o.updateOutputFilename()
 
-proc makeSlangCmd(o: SlangcOptions, slangPath = ""): string =
+proc `layout=`*(o: var SlangcOptions, l: ShaderDataLayout) =
+  o.layout = l
+
+proc `profile=`*(o: var SlangcOptions, p: string) =
+  o.profile = p
+
+proc `useEntrypointName=`*(o: var SlangcOptions, v: bool) =
+  o.useEntrypointName = v
+
+proc `reflectionJsonFile=`*(o: var SlangcOptions, path: string) =
+  o.reflectionJsonFile = path
+
+proc makeSlangCmd*(o: SlangcOptions, slangPath = ""): string =
   let slangBin =
     if slangPath.len > 0:
       slangPath / "slangc"
     else:
-      findExe("slangc")
-  if slangBin.len == 0:
-    raise newException(Exception, "Failed to find slangc in PATH")
+      "slangc"
 
   let entryPointOptArg =
     if o.entryPoint.len > 0:
       fmt" -entry {o.entryPoint}"
     else:
       ""
+
+  let layoutOptArg =
+    if ($o.layout).len > 0:
+      fmt" {$o.layout}"
+    else:
+      ""
+
+  # Profile handling:
+  # If specified explicitly, use it. Otherwise, default to glsl_460 for GLSL target,
+  # but omit -profile for SPIR-V so Vulkan gets standard SPIR-V without OpenGL-isms.
+  let profileOptArg =
+    if o.profile.len > 0:
+      fmt" -profile {o.profile}"
+    elif o.target == Glsl:
+      " -profile glsl_460"
+    else:
+      ""
+
+  let entryNameOptArg =
+    if o.useEntrypointName:
+      " -fvk-use-entrypoint-name"
+    else:
+      ""
+
+  let reflOptArg =
+    if o.reflectionJsonFile.len > 0:
+      fmt" -reflection-json {o.reflectionJsonFile}"
+    else:
+      ""
+
   return
-    fmt"{slangBin} {o.inFile} -no-mangle -target {o.target} -stage {o.stage}{entryPointOptArg} -profile glsl_460 -o {o.outFile}"
+    fmt"{slangBin} {o.inFile} -no-mangle -target {o.target} -stage {o.stage}{entryPointOptArg}{profileOptArg}{layoutOptArg}{entryNameOptArg}{reflOptArg} -o {o.outFile}"
 
 proc compileShaderOrRaise*(o: SlangcOptions, slangPath = ""): string =
-  ## Runs slangc and returns the compiled shader source, raising with the compiler output
-  ## on failure.
-  let cmdRes = o.makeSlangCmd(slangPath).execCmdEx()
+  ## Runs slangc and returns the compiled shader source or bytes, raising on failure.
+  let cmd = o.makeSlangCmd(slangPath)
+  let cmdRes = cmd.execCmdEx()
   if cmdRes.exitCode != 0:
     raise newException(
-      Exception, &"Failed to compile shader {o.inFile}:\n\n{cmdRes.output}"
+      Exception, fmt"Failed to compile shader {o.inFile} (command: {cmd}):\n\n{cmdRes.output}"
     )
 
   return o.outFile.readFile()
