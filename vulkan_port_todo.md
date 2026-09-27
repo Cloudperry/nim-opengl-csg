@@ -17,6 +17,7 @@ This checklist tracks the implementation of the Vulkan 1.4 compute stream port o
 - [x] Update `Slangc.nim` with `ShaderDataLayout` options (`CLayout`, `Scalar`, etc.) and target-aware profile handling (omit GLSL profiles when compiling for Vulkan SPIR-V).
 - [x] Implement 2D animated SDF circle compute shader (`shaders/Test2D.slang`) and host test runner (`tests/test_checkpoint1.nim`).
 - [x] Support headless screenshot readback and automated window presentation.
+- [ ] Add layout validation tag/flag to shader output compiled through the Nim Slang API (validate at load time so layouts cannot silently mismatch).
 - [ ] Address remaining phase 1 architectural items (generalizing dispatch and robust surface resize handling).
 
 ### [ ] Checkpoint 2: Full SDF Slang Shader BDA Migration & Reflection Test
