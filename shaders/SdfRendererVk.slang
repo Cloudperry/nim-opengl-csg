@@ -681,6 +681,16 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
   output.color = float4(push.scene.bgColor, 1.0);
 }
 
+[ForceInline]
+float linearToSrgb(float c) {
+  return (c <= 0.0031308) ? (c * 12.92) : (1.055 * pow(max(c, 0.0), 1.0 / 2.4) - 0.055);
+}
+
+[ForceInline]
+float3 linearToSrgb(float3 c) {
+  return float3(linearToSrgb(c.r), linearToSrgb(c.g), linearToSrgb(c.b));
+}
+
 // Compute shader variant of the renderer with direct BDA pointers and push constants.
 [shader("compute")]
 [numthreads(8, 8, 1)]
@@ -693,13 +703,14 @@ void computeMain(uint3 threadId: SV_DispatchThreadID) {
   FragmentOutput output = (FragmentOutput)0;
 
   float2 fragUv = (float2(threadId.xy) + 0.5) / float2(width, height);
-  float2 uvNdc = fragUv * 2.0 - 1.0;
+  float2 uvNdc = float2(fragUv.x * 2.0 - 1.0, 1.0 - fragUv.y * 2.0);
   uvNdc.x *= push.scene.aspect;
   float z = 1.0 / tan(radians(push.scene.fov) * 0.5); // Image plane depth
   float3 rayDirection = normalize(push.scene.camForward * z + push.scene.camRight * uvNdc.x + push.scene.camUp * uvNdc.y);
 
   renderScene(SdfProgramScene(), output, rayDirection);
-  output.color += gradientNoiseWithStrength(float2(threadId.xy) + 0.5, 1.0);
+  float2 noiseCoord = float2(float(threadId.x) + 0.5, float(height - 1 - threadId.y) + 0.5);
+  output.color += gradientNoiseWithStrength(noiseCoord, 1.0);
 
-  outputImage[threadId.xy] = output.color;
+  outputImage[threadId.xy] = float4(linearToSrgb(output.color.rgb), output.color.a);
 }

@@ -228,7 +228,11 @@ proc initGpuDevice*(win: sdl3.Window, maxPushConstantBytes: int = 128): GpuDevic
   )
   checkVkErr(vkCreatePipelineLayout(result.device, pipeLayoutCI.addr, nil, result.computeLayout.addr), "CreatePipelineLayout")
 
-# Device Destruction
+# Device Synchronization & Destruction
+proc waitIdle*(device: GpuDevice) =
+  if device != nil and device.device.int64 != 0:
+    discard vkDeviceWaitIdle(device.device)
+
 proc destroy*(device: GpuDevice) =
   if device == nil: return
   if device.device.int64 != 0:
@@ -311,6 +315,7 @@ template `[]=`*[T](slice: var GpuSlice[T], index: int, val: T) =
   slice.hostPtr[index] = val
 
 proc writeSlice*[T](slice: var GpuSlice[T], data: openArray[T], dstOffset = 0) =
+  if data.len == 0: return
   copyMem(slice.hostPtr[dstOffset].addr, data[0].unsafeAddr, sizeof(T) * data.len)
 
 # Target & Swapchain Helper Procedures
