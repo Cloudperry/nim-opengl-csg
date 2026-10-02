@@ -39,8 +39,11 @@ proc short(s: ShaderStage): string =
   of Compute: "Comp"
 
 proc getOutputFilename*(o: SlangcOptions): string =
-  let inputName = o.inFile.split(".")
-  return fmt"{inputName[0]}{o.stage.short()}.{o.target.fileExt()}"
+  let (dir, name, _) = splitFile(o.inFile)
+  let outName = fmt"{name}{o.stage.short()}.{o.target.fileExt()}"
+  if dir.len > 0:
+    return dir / outName
+  return outName
 
 proc updateOutputFilename(o: var SlangcOptions) =
   o.outFile = o.getOutputFilename()
@@ -75,8 +78,11 @@ proc `inFile=`*(o: var SlangcOptions, path: string) =
   o.inFile = path
   o.updateOutputFilename()
 
-proc `target=`*(o: var SlangcOptions, target: TargetFormat) =
-  o.target = target
+proc `entryPoint=`*(o: var SlangcOptions, ep: string) =
+  o.entryPoint = ep
+
+proc `target=`*(o: var SlangcOptions, t: TargetFormat) =
+  o.target = t
   o.updateOutputFilename()
 
 proc `stage=`*(o: var SlangcOptions, s: ShaderStage) =

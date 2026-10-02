@@ -103,31 +103,61 @@ proc toNimTypeIdent(t: SlangType): NimNode =
   else:
     ident("uint64")
 
-macro importSlangShader*(
+proc resolveShaderPath*(path: string): string =
+  ## Resolves a shader path to an absolute path, searching common source locations at compile time.
+  if isAbsolute(path) and fileExists(path):
+    return path
+  let projPath = getProjectPath()
+  if fileExists(projPath / path):
+    return (projPath / path).normalizedPath
+  if fileExists(projPath.parentDir / path):
+    return (projPath.parentDir / path).normalizedPath
+  let repoRoot = currentSourcePath.parentDir.parentDir
+  if fileExists(repoRoot / path):
+    return (repoRoot / path).normalizedPath
+  return path
+
+macro importAndCompileShader*(
     slangPath: static[string],
     typesToImport: static[openArray[string]],
     stage: static[ShaderStage] = Compute,
     entryPoint: static[string] = "computeMain",
     layout: static[ShaderDataLayout] = CLayout,
     target: static[TargetFormat] = SpirV,
+    profile: static[string] = "",
+    useEntrypointName: static[bool] = false,
 ): untyped =
   ## Compiles the Slang shader via Slangc at compile-time with the requested layout,
-  ## parses reflection JSON, and emits matching Nim types without manual padding.
-  let baseName = if slangPath.endsWith(".slang"): slangPath[0 .. ^7] else: slangPath
+  ## tracks file dependencies, parses reflection JSON, and emits matching Nim types.
+  let resolvedSlang = resolveShaderPath(slangPath)
+  if not fileExists(resolvedSlang):
+    error("Could not find Slang shader file: '" & slangPath & "' (searched project and repo root)")
+
+  # Track shader source file as compile-time dependency for cache invalidation
+  discard staticRead(resolvedSlang)
+
+  let baseName = if resolvedSlang.endsWith(".slang"): resolvedSlang[0 .. ^7] else: resolvedSlang
   let reflPath = baseName & ".reflection.json"
 
   var opts = initSlangcOptions(
-    inFile = slangPath,
+    inFile = resolvedSlang,
     stage = stage,
     entryPoint = entryPoint,
     target = target,
     layout = layout,
+    profile = profile,
+    useEntrypointName = useEntrypointName,
     reflectionJsonFile = reflPath,
   )
   let cmd = opts.makeSlangCmd()
-  let compileRes = staticExec(cmd)
+  let checkCmd = cmd & " && echo __SLANG_OK__"
+  let compileRes = staticExec(checkCmd)
+  if not compileRes.contains("__SLANG_OK__"):
+    error("Slang compilation failed for shader '" & slangPath & "'!\nCommand: " & cmd & "\nOutput:\n" & compileRes)
 
-  # Check reflection file existence
+  # Check and read reflection file
+  if not fileExists(reflPath):
+    error("Slang reflection JSON file was not generated: " & reflPath)
   let jsonStr = staticRead(reflPath)
   let refl = parseSlangReflectionJson(jsonStr)
 
@@ -166,9 +196,28 @@ macro importSlangShader*(
         (`tgX`.uint32, `tgY`.uint32, `tgZ`.uint32)
     result.add(metaProc)
 
-  # Also provide helper to get the compiled shader binary path
+  # Also provide helpers to get the compiled shader binary path and compiled bytecode
   let spvPathLit = opts.outFile
   let pathProcIdent = ident("getShaderBinaryPath_" & entryPoint)
   let pathProc = quote do:
     proc `pathProcIdent`*(): string = `spvPathLit`
   result.add(pathProc)
+
+  # Read compiled bytecode at compile-time and embed directly as string literal
+  let spvBytes = staticRead(opts.outFile)
+  let codeProcIdent = ident("getShaderCode_" & entryPoint)
+  let codeProc = quote do:
+    proc `codeProcIdent`*(): string = `spvBytes`
+  result.add(codeProc)
+
+template importSlangShader*(
+    slangPath: static[string],
+    typesToImport: static[openArray[string]],
+    stage: static[ShaderStage] = Compute,
+    entryPoint: static[string] = "computeMain",
+    layout: static[ShaderDataLayout] = CLayout,
+    target: static[TargetFormat] = SpirV,
+    profile: static[string] = "",
+    useEntrypointName: static[bool] = false,
+): untyped =
+  importAndCompileShader(slangPath, typesToImport, stage, entryPoint, layout, target, profile, useEntrypointName)

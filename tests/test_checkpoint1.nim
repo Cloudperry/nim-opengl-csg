@@ -5,7 +5,7 @@ import GpuStream
 import SlangIntegration
 
 # 1. Compile-time Slang shader compilation & type generation via Slangc
-importSlangShader("shaders/Test2D.slang", ["TestParams", "PushConstants"])
+importAndCompileShader("shaders/Test2D.slang", ["TestParams", "PushConstants"])
 
 proc main() =
   let args = commandLineParams()
@@ -33,8 +33,8 @@ proc main() =
   # 3. Create Target & Swapchain
   var target = createTarget(device, win, winWidth, winHeight)
 
-  # 4. Load SPIR-V Compute Shader Object (compiled automatically by importSlangShader)
-  let spvCode = readFile(getShaderBinaryPath_computeMain())
+  # 4. Load SPIR-V Compute Shader Object (bytecode embedded at compile-time by importAndCompileShader)
+  let spvCode = getShaderCode_computeMain()
   var shader = loadComputeShader(device, spvCode, "main")
 
   # 5. Initialize Command Stream
