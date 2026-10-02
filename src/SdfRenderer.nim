@@ -271,6 +271,7 @@ proc updateCamera(frame: FrameState) =
 proc update(frame: FrameState) =
   updateCamera(frame)
 
+proc updateSceneDynamicArgs() =
   case sdfRenderer.scene
   of DynamicObjectsTestRoom:
     let time =
@@ -295,6 +296,8 @@ proc draw(conf: Config) =
   if not sdfRenderer.stream.beginFrame(sdfRenderer.target):
     sdfRenderer.target.resize(win, force = true)
     return
+
+  updateSceneDynamicArgs()
 
   let w = sdfRenderer.target.width
   let h = sdfRenderer.target.height
