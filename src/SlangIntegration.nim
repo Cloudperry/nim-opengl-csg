@@ -100,6 +100,9 @@ proc toNimTypeIdent(t: SlangType): NimNode =
     ident("uint64")
   of "struct":
     ident(t.name)
+  of "enum":
+    # Slang enums are 32-bit unsigned integers
+    ident("uint32")
   else:
     ident("uint64")
 
@@ -183,7 +186,18 @@ macro importAndCompileShader*(
 
   result.add(typeSection)
 
-  # Generate workgroup and metadata helpers (both shader-specific and entrypoint-named)
+  # Static size assertions for strict ABI validation
+  for reqName in typesToImport:
+    let st = refl.findStructType(reqName)
+    if st != nil and st.sizes.len > 0 and st.sizes[0].value > 0:
+      let expSize = st.sizes[0].value
+      let reqIdent = ident(reqName)
+      let assertStmt = quote do:
+        static:
+          doAssert sizeof(`reqIdent`) == `expSize`, "Struct size mismatch for " & `reqName` & ": Nim=" & $sizeof(`reqIdent`) & " vs Slang=" & $`expSize`
+      result.add(assertStmt)
+
+  # Generate workgroup and metadata helpers (named by shaderBaseName to allow multiple shader imports per module)
   if refl.entryPoints.len > 0:
     let ep = refl.entryPoints[0]
     let tg = ep.threadGroupSize
@@ -196,6 +210,13 @@ macro importAndCompileShader*(
       proc `metaIdentShader`*(): tuple[workgroupX, workgroupY, workgroupZ: uint32] =
         (`tgX`.uint32, `tgY`.uint32, `tgZ`.uint32)
     result.add(metaProcShader)
+
+    if useEntrypointName:
+      let metaIdentEp = ident("getShaderMeta_" & ep.name)
+      let metaProcEp = quote do:
+        proc `metaIdentEp`*(): tuple[workgroupX, workgroupY, workgroupZ: uint32] =
+          (`tgX`.uint32, `tgY`.uint32, `tgZ`.uint32)
+      result.add(metaProcEp)
 
   # Path helpers
   let spvPathLit = opts.outFile
@@ -210,6 +231,17 @@ macro importAndCompileShader*(
   let codeProc = quote do:
     proc `codeProcShader`*(): string = `spvBytes`
   result.add(codeProc)
+
+  if useEntrypointName:
+    let codeProcEp = ident("getShaderCode_" & entryPoint)
+    let codeProcEpStmt = quote do:
+      proc `codeProcEp`*(): string = `spvBytes`
+    result.add(codeProcEpStmt)
+
+    let pathProcEp = ident("getShaderBinaryPath_" & entryPoint)
+    let pathProcEpStmt = quote do:
+      proc `pathProcEp`*(): string = `spvPathLit`
+    result.add(pathProcEpStmt)
 
 template importSlangShader*(
     slangPath: static[string],

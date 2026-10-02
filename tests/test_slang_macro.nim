@@ -13,8 +13,8 @@ p.aspectRatio = 1.777f32
 var push: PushConstants
 push.params = 12345678'u64
 
-let meta = getShaderMeta_computeMain()
-let binPath = getShaderBinaryPath_computeMain()
+let meta = getShaderMeta_Test2D()
+let binPath = getShaderBinaryPath_Test2D()
 echo "TestParams size: ", sizeof(TestParams)
 echo "PushConstants size: ", sizeof(PushConstants)
 echo "Workgroup size: ", meta

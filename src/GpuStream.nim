@@ -22,6 +22,7 @@ type
     cmdPool*: VkCommandPool
     computeLayout*: VkPipelineLayout
     descriptorLayout*: VkDescriptorSetLayout
+    maxPushConstantBytes*: int
 
   GpuSlice*[T] = object
     ## Typed GPU memory slice with persistent host mapping and 64-bit device address.
@@ -73,6 +74,7 @@ proc initGpuDevice*(win: sdl3.Window, maxPushConstantBytes: int = 128): GpuDevic
   loadVulkan()
   doAssert vkInit()
   new(result)
+  result.maxPushConstantBytes = maxPushConstantBytes
 
   # 1. Instance
   var sdlExtCount: uint32
@@ -482,7 +484,7 @@ proc loadComputeShader*(device: GpuDevice, spvCode: string, entryName: string = 
   var pushRange = VkPushConstantRange(
     stageFlags: VkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
     offset: 0,
-    size: 128,
+    size: device.maxPushConstantBytes.uint32,
   )
 
   var shaderCI = VkShaderCreateInfoEXT(
