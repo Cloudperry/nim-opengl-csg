@@ -8,7 +8,7 @@ This checklist tracks the implementation of the Vulkan 1.4 compute stream port o
 
 ### [x] Checkpoint 0: Baseline Capture & Automated Diff Harness
 - [x] Capture golden `.ppm` images from OpenGL compute baseline (`BasicLit`, `ShadowedLit`, `Unlit`, `DebugNormals`, `DebugSteps`).
-- [x] Create Python parity comparison tool (`tests/diff_images.py`) with MSE/PSNR calculation and delta heatmap generation.
+- [x] Create Python parity comparison tool (`tests/diff_images.py`) with MSE/PSNR calculation and delta heatmap generation.\
 - [x] Verify comparison script against golden references.
 
 ### [ ] Checkpoint 1: Co-Design & Finalization of GFX RHI + Slang Integration via 2D Test
@@ -17,8 +17,9 @@ This checklist tracks the implementation of the Vulkan 1.4 compute stream port o
 - [x] Update `Slangc.nim` with `ShaderDataLayout` options (`CLayout`, `Scalar`, etc.) and target-aware profile handling (omit GLSL profiles when compiling for Vulkan SPIR-V).
 - [x] Implement 2D animated SDF circle compute shader (`shaders/Test2D.slang`) and host test runner (`tests/test_checkpoint1.nim`).
 - [x] Support headless screenshot readback and automated window presentation.
+- [x] Implement robust surface lifecycle, leak-free device probing, and window resize handling (`target.resize(w, h)` and `--testResize`).
 - [ ] Add layout validation tag/flag to shader output compiled through the Nim Slang API (validate at load time so layouts cannot silently mismatch).
-- [ ] Address remaining phase 1 architectural items (generalizing dispatch and robust surface resize handling).
+- [ ] Decouple `stream.dispatch` from `GpuTarget` for general compute (buffer-to-buffer dispatches, prepasses).
 
 ### [ ] Checkpoint 2: Full SDF Slang Shader BDA Migration & Reflection Test
 - [ ] Refactor `shaders/SdfRenderer.slang` to use 64-bit BDA pointers in push constants (`SdfPushParams`).
@@ -59,9 +60,9 @@ The following issues were identified during architectural and system reviews:
 - [ ] **`dispatch` Hardcoded to `GpuTarget`**:
   - *Issue*: `stream.dispatch` currently requires passing `target: GpuTarget` and automatically binds descriptor binding 0 to `target.storageView`. Checkpoint 2 and multi-pass compute pipelines require buffer-to-buffer dispatches or multiple textures.
   - *Action*: Decouple `stream.dispatch` into a general form (`stream.dispatch(shader, push, wgX, wgY, wgZ)`) with explicit descriptor binding helpers or binding abstractions.
-- [ ] **Surface Leak & Missing Resize Support**:
-  - *Issue*: `vulkanCreateSurface` handle was discarded in a local variable instead of being saved in `GpuTarget`. Window resizing currently causes `beginFrame` to spin without swapchain recreation.
-  - *Status*: Surface handle is now retained in `GpuTarget`, but swapchain recreation logic (`target.resize(w, h)`) is pending implementation.
+- [x] **Surface Leak & Missing Resize Support**:
+  - *Identified*: Temporary probe surface created during `initGpuDevice` was never destroyed, leaking a `VkSurfaceKHR`. Window resizing caused `beginFrame` to spin without swapchain recreation.
+  - *Fix Applied*: Probe surface in `initGpuDevice` is destroyed immediately after queue selection (`vkDestroySurfaceKHR`). Persistent surface is owned by `GpuTarget`. Implemented `target.resize(newWidth, newHeight)` and `target.resize(win)` with swapchain & storage image recreation, zero-extent minimization handling, graceful `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` handling in `beginFrame` and `present`, clean `destroy` procs for `GpuDevice`, `GpuTarget`, `GpuStream`, and `ComputeShader`, and automated programmatic resize test in `tests/test_checkpoint1.nim` (`--testResize`).
 - [x] **Hardcoded `"main"` in `loadComputeShader`**:
   - *Identified*: The `entryName` argument in `loadComputeShader` was ignored and `"main"` was hardcoded in `VkShaderCreateInfoEXT`.
   - *Fix Applied*: `entryName.cstring` is passed to `pName` in `VkShaderCreateInfoEXT`.

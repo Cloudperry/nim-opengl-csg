@@ -1,7 +1,4 @@
-## GpuStream: Minimal Vulkan 1.4 Compute Stream & Direct Memory Abstraction
-## Provides GpuDevice, GpuSlice[T], GpuTarget, ComputeShader, and GpuStream.
-
-import std/[strformat, math, strutils]
+import std/[strformat, strutils]
 import sdl3
 import vk14
 
@@ -10,11 +7,10 @@ when defined(windows):
 elif defined(macosx):
   const SdlLib = "libSDL3.dylib"
 else:
-  const SdlLib = "libSDL3.so"
+  const SdlLib = "libSDL3.so(|.0)"
 
 proc vulkanGetInstanceExtensions(count: ptr uint32): cstringArray {.cdecl, dynlib: SdlLib, importc: "SDL_Vulkan_GetInstanceExtensions".}
 proc vulkanCreateSurface(window: sdl3.Window, instance: VkInstance, allocator: pointer, surface: ptr VkSurfaceKHR): bool {.cdecl, dynlib: SdlLib, importc: "SDL_Vulkan_CreateSurface".}
-proc vulkanDestroySurface(instance: VkInstance, surface: VkSurfaceKHR, allocator: pointer) {.cdecl, dynlib: SdlLib, importc: "SDL_Vulkan_DestroySurface".}
 
 type
   GpuDevice* = ref object
@@ -37,6 +33,7 @@ type
 
   GpuTarget* = ref object
     ## Offscreen storage image + swapchain backbuffer linkage.
+    device*: GpuDevice
     surface*: VkSurfaceKHR
     storageImage*: VkImage
     storageMemory*: VkDeviceMemory
@@ -74,7 +71,6 @@ proc findMemoryType*(pDevice: VkPhysicalDevice, typeFilter: uint32, properties: 
 proc initGpuDevice*(win: sdl3.Window, maxPushConstantBytes: int = 128): GpuDevice =
   loadVulkan()
   doAssert vkInit()
-
   new(result)
 
   # 1. Instance
@@ -101,7 +97,7 @@ proc initGpuDevice*(win: sdl3.Window, maxPushConstantBytes: int = 128): GpuDevic
   setInstance(cast[pointer](result.instance))
   loadVK_KHR_surface()
 
-  # 2. Surface for physical device selection
+  # 2. Probe surface for physical device selection
   var tempSurface: VkSurfaceKHR
   if not vulkanCreateSurface(win, result.instance, nil, tempSurface.addr):
     quit fmt"Failed to create surface: {getError()}"
@@ -126,13 +122,13 @@ proc initGpuDevice*(win: sdl3.Window, maxPushConstantBytes: int = 128): GpuDevic
         break
     if result.physicalDevice.int64 != 0: break
 
+  # Destroy probe surface immediately - physical device and queue family are selected!
+  vkDestroySurfaceKHR(result.instance, tempSurface, nil)
+
   if result.physicalDevice.int64 == 0:
     quit "Could not find a physical device with graphics, compute, and presentation support"
 
-  # Destroy temp surface (actual surface is managed in GpuTarget)
-  vulkanDestroySurface(result.instance, tempSurface, nil)
-
-  # 4. Logical Device with modern features
+  # 4. Device Features
   var shaderObjectFeatures = VkPhysicalDeviceShaderObjectFeaturesEXT(
     sType: VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_FEATURES_EXT,
     shaderObject: VK_TRUE,
@@ -191,22 +187,30 @@ proc initGpuDevice*(win: sdl3.Window, maxPushConstantBytes: int = 128): GpuDevic
 
   vkGetDeviceQueue(result.device, result.queueFamilyIndex, 0, result.queue.addr)
 
-  # 5. Push Descriptor Set Layout for storage image (binding 0)
+  # 5. Command Pool
+  var cmdPoolCI = VkCommandPoolCreateInfo(
+    sType: VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+    flags: VkCommandPoolCreateFlags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT),
+    queueFamilyIndex: result.queueFamilyIndex,
+  )
+  checkVkErr(vkCreateCommandPool(result.device, cmdPoolCI.addr, nil, result.cmdPool.addr), "CreateCommandPool")
+
+  # 6. Descriptor Set Layout (Push Descriptor for Storage Image binding 0)
   var layoutBinding = VkDescriptorSetLayoutBinding(
     binding: 0,
     descriptorType: VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
     descriptorCount: 1,
     stageFlags: VkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
   )
-  var dsLayoutCI = VkDescriptorSetLayoutCreateInfo(
+  var descLayoutCI = VkDescriptorSetLayoutCreateInfo(
     sType: VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
     flags: VkDescriptorSetLayoutCreateFlags(VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR),
     bindingCount: 1,
     pBindings: layoutBinding.addr,
   )
-  checkVkErr(vkCreateDescriptorSetLayout(result.device, dsLayoutCI.addr, nil, result.descriptorLayout.addr), "CreateDescriptorSetLayout")
+  checkVkErr(vkCreateDescriptorSetLayout(result.device, descLayoutCI.addr, nil, result.descriptorLayout.addr), "CreateDescriptorSetLayout")
 
-  # 6. Pipeline Layout (Push constants + push descriptors)
+  # 7. Pipeline Layout (1 Push Descriptor Set + 128 Push Constants)
   var pushRange = VkPushConstantRange(
     stageFlags: VkShaderStageFlags(VK_SHADER_STAGE_COMPUTE_BIT),
     offset: 0,
@@ -221,23 +225,35 @@ proc initGpuDevice*(win: sdl3.Window, maxPushConstantBytes: int = 128): GpuDevic
   )
   checkVkErr(vkCreatePipelineLayout(result.device, pipeLayoutCI.addr, nil, result.computeLayout.addr), "CreatePipelineLayout")
 
-  # 7. Command Pool
-  var cmdPoolCI = VkCommandPoolCreateInfo(
-    sType: VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-    flags: VkCommandPoolCreateFlags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT),
-    queueFamilyIndex: result.queueFamilyIndex,
-  )
-  checkVkErr(vkCreateCommandPool(result.device, cmdPoolCI.addr, nil, result.cmdPool.addr), "CreateCommandPool")
+# Device Destruction
+proc destroy*(device: GpuDevice) =
+  if device == nil: return
+  if device.device.int64 != 0:
+    discard vkDeviceWaitIdle(device.device)
+    if device.computeLayout.int64 != 0:
+      vkDestroyPipelineLayout(device.device, device.computeLayout, nil)
+      device.computeLayout = VkPipelineLayout(0)
+    if device.descriptorLayout.int64 != 0:
+      vkDestroyDescriptorSetLayout(device.device, device.descriptorLayout, nil)
+      device.descriptorLayout = VkDescriptorSetLayout(0)
+    if device.cmdPool.int64 != 0:
+      vkDestroyCommandPool(device.device, device.cmdPool, nil)
+      device.cmdPool = VkCommandPool(0)
+    vkDestroyDevice(device.device, nil)
+    device.device = VkDevice(0)
+  if device.instance.int64 != 0:
+    vkDestroyInstance(device.instance, nil)
+    device.instance = VkInstance(0)
 
-# Memory / GpuSlice API
+# Typed GPU Memory Slice (Direct Memory / BDA)
 proc allocSlice*[T](device: GpuDevice, count: int): GpuSlice[T] =
   result.len = count
-  let byteSize = (sizeof(T) * count).VkDeviceSize
+  let sizeBytes = (sizeof(T) * count).VkDeviceSize
 
   var bufCI = VkBufferCreateInfo(
     sType: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-    size: byteSize,
-    usage: VkBufferUsageFlags(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT or VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT),
+    size: sizeBytes,
+    usage: VkBufferUsageFlags(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT or VK_BUFFER_USAGE_STORAGE_BUFFER_BIT),
     sharingMode: VK_SHARING_MODE_EXCLUSIVE,
   )
   checkVkErr(vkCreateBuffer(device.device, bufCI.addr, nil, result.buffer.addr), "CreateBuffer")
@@ -245,28 +261,33 @@ proc allocSlice*[T](device: GpuDevice, count: int): GpuSlice[T] =
   var memReqs: VkMemoryRequirements
   vkGetBufferMemoryRequirements(device.device, result.buffer, memReqs.addr)
 
-  var allocFlagsInfo = VkMemoryAllocateFlagsInfo(
+  # Host-visible + coherent + device-local where supported
+  var memTypeIdx = findMemoryType(device.physicalDevice, memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+
+  var allocFlags = VkMemoryAllocateFlagsInfo(
     sType: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
     flags: VkMemoryAllocateFlags(VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT),
   )
   var allocInfo = VkMemoryAllocateInfo(
     sType: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-    pNext: allocFlagsInfo.addr,
+    pNext: allocFlags.addr,
     allocationSize: memReqs.size,
-    memoryTypeIndex: findMemoryType(device.physicalDevice, memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+    memoryTypeIndex: memTypeIdx,
   )
   checkVkErr(vkAllocateMemory(device.device, allocInfo.addr, nil, result.memory.addr), "AllocateMemory")
   checkVkErr(vkBindBufferMemory(device.device, result.buffer, result.memory, 0), "BindBufferMemory")
 
+  # Map host pointer permanently
   var mapped: pointer
-  checkVkErr(vkMapMemory(device.device, result.memory, 0.VkDeviceSize, byteSize, VkMemoryMapFlags(0), mapped.addr), "MapMemory")
+  checkVkErr(vkMapMemory(device.device, result.memory, 0.VkDeviceSize, sizeBytes, VkMemoryMapFlags(0), mapped.addr), "MapMemory")
   result.hostPtr = cast[ptr UncheckedArray[T]](mapped)
 
-  var bdaInfo = VkBufferDeviceAddressInfo(
+  # Retrieve 64-bit GPU virtual address
+  var addrInfo = VkBufferDeviceAddressInfo(
     sType: VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
     buffer: result.buffer,
   )
-  result.deviceAddress = vkGetBufferDeviceAddress(device.device, bdaInfo.addr)
+  result.deviceAddress = vkGetBufferDeviceAddress(device.device, addrInfo.addr)
 
 proc dealloc*[T](device: GpuDevice, slice: var GpuSlice[T]) =
   if slice.memory.int64 != 0:
@@ -278,6 +299,7 @@ proc dealloc*[T](device: GpuDevice, slice: var GpuSlice[T]) =
     slice.buffer = VkBuffer(0)
   slice.hostPtr = nil
   slice.len = 0
+  slice.deviceAddress = 0
 
 template `[]`*[T](slice: GpuSlice[T], index: int): lent T =
   slice.hostPtr[index]
@@ -288,37 +310,65 @@ template `[]=`*[T](slice: var GpuSlice[T], index: int, val: T) =
 proc writeSlice*[T](slice: var GpuSlice[T], data: openArray[T], dstOffset = 0) =
   copyMem(slice.hostPtr[dstOffset].addr, data[0].unsafeAddr, sizeof(T) * data.len)
 
-# Target & Swapchain API
-proc createTarget*(device: GpuDevice, win: sdl3.Window, width, height: int32): GpuTarget =
-  new(result)
-  result.width = width
-  result.height = height
+# Target & Swapchain Helper Procedures
+proc destroyStorage(target: GpuTarget) =
+  if target.device == nil or target.device.device.int64 == 0: return
+  if target.storageView.int64 != 0:
+    vkDestroyImageView(target.device.device, target.storageView, nil)
+    target.storageView = VkImageView(0)
+  if target.storageImage.int64 != 0:
+    vkDestroyImage(target.device.device, target.storageImage, nil)
+    target.storageImage = VkImage(0)
+  if target.storageMemory.int64 != 0:
+    vkFreeMemory(target.device.device, target.storageMemory, nil)
+    target.storageMemory = VkDeviceMemory(0)
 
-  if not vulkanCreateSurface(win, device.instance, nil, result.surface.addr):
-    quit "Failed to create Vulkan surface for GpuTarget"
+proc destroySwapchain(target: GpuTarget) =
+  if target.device == nil or target.device.device.int64 == 0: return
+  if target.swapchain.int64 != 0:
+    vkDestroySwapchainKHR(target.device.device, target.swapchain, nil)
+    target.swapchain = VkSwapchainKHR(0)
+  target.swapchainImages.setLen(0)
 
+proc initSwapchainAndStorage(target: GpuTarget, width, height: int32) =
   var surfCaps: VkSurfaceCapabilitiesKHR
-  checkVkErr(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.physicalDevice, result.surface, surfCaps.addr), "SurfaceCaps")
+  checkVkErr(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(target.device.physicalDevice, target.surface, surfCaps.addr), "SurfaceCaps")
+
+  var actualWidth = width.uint32
+  var actualHeight = height.uint32
+  if surfCaps.currentExtent.width != uint32.high and surfCaps.currentExtent.width != 0:
+    actualWidth = surfCaps.currentExtent.width
+    actualHeight = surfCaps.currentExtent.height
+  else:
+    actualWidth = clamp(actualWidth, surfCaps.minImageExtent.width, surfCaps.maxImageExtent.width)
+    actualHeight = clamp(actualHeight, surfCaps.minImageExtent.height, surfCaps.maxImageExtent.height)
+
+  if actualWidth == 0 or actualHeight == 0:
+    target.width = 0
+    target.height = 0
+    return
 
   var formatCount: uint32
-  checkVkErr(vkGetPhysicalDeviceSurfaceFormatsKHR(device.physicalDevice, result.surface, formatCount.addr, nil), "SurfaceFormats count")
+  checkVkErr(vkGetPhysicalDeviceSurfaceFormatsKHR(target.device.physicalDevice, target.surface, formatCount.addr, nil), "SurfaceFormats count")
   var surfFormats = newSeq[VkSurfaceFormatKHR](formatCount)
-  checkVkErr(vkGetPhysicalDeviceSurfaceFormatsKHR(device.physicalDevice, result.surface, formatCount.addr, surfFormats[0].addr), "SurfaceFormats")
+  checkVkErr(vkGetPhysicalDeviceSurfaceFormatsKHR(target.device.physicalDevice, target.surface, formatCount.addr, surfFormats[0].addr), "SurfaceFormats")
 
   var chosenFormat = surfFormats[0]
   for f in surfFormats:
     if f.format == VK_FORMAT_B8G8R8A8_UNORM or f.format == VK_FORMAT_R8G8B8A8_UNORM:
       chosenFormat = f
       break
-  result.format = chosenFormat.format
+  target.format = chosenFormat.format
+
+  let oldSwapchain = target.swapchain
 
   var swapchainCI = VkSwapchainCreateInfoKHR(
     sType: VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-    surface: result.surface,
+    surface: target.surface,
     minImageCount: max(2'u32, surfCaps.minImageCount),
     imageFormat: chosenFormat.format,
     imageColorSpace: chosenFormat.colorSpace,
-    imageExtent: VkExtent2D(width: width.uint32, height: height.uint32),
+    imageExtent: VkExtent2D(width: actualWidth, height: actualHeight),
     imageArrayLayers: 1,
     imageUsage: VkImageUsageFlags(VK_IMAGE_USAGE_TRANSFER_DST_BIT or VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT),
     imageSharingMode: VK_SHARING_MODE_EXCLUSIVE,
@@ -326,20 +376,24 @@ proc createTarget*(device: GpuDevice, win: sdl3.Window, width, height: int32): G
     compositeAlpha: VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
     presentMode: VK_PRESENT_MODE_FIFO_KHR,
     clipped: VK_TRUE,
+    oldSwapchain: oldSwapchain,
   )
-  checkVkErr(vkCreateSwapchainKHR(device.device, swapchainCI.addr, nil, result.swapchain.addr), "CreateSwapchain")
+  checkVkErr(vkCreateSwapchainKHR(target.device.device, swapchainCI.addr, nil, target.swapchain.addr), "CreateSwapchain")
+
+  if oldSwapchain.int64 != 0:
+    vkDestroySwapchainKHR(target.device.device, oldSwapchain, nil)
 
   var swapImgCount: uint32
-  checkVkErr(vkGetSwapchainImagesKHR(device.device, result.swapchain, swapImgCount.addr, nil), "SwapchainImages count")
-  result.swapchainImages = newSeq[VkImage](swapImgCount)
-  checkVkErr(vkGetSwapchainImagesKHR(device.device, result.swapchain, swapImgCount.addr, result.swapchainImages[0].addr), "SwapchainImages")
+  checkVkErr(vkGetSwapchainImagesKHR(target.device.device, target.swapchain, swapImgCount.addr, nil), "SwapchainImages count")
+  target.swapchainImages = newSeq[VkImage](swapImgCount)
+  checkVkErr(vkGetSwapchainImagesKHR(target.device.device, target.swapchain, swapImgCount.addr, target.swapchainImages[0].addr), "SwapchainImages")
 
   # Storage image follows swapchain format exactly to eliminate color channel mismatch in vkCmdCopyImage2
   var offImgCI = VkImageCreateInfo(
     sType: VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
     imageType: VK_IMAGE_TYPE_2D,
-    format: result.format,
-    extent: VkExtent3D(width: width.uint32, height: height.uint32, depth: 1),
+    format: target.format,
+    extent: VkExtent3D(width: actualWidth, height: actualHeight, depth: 1),
     mipLevels: 1,
     arrayLayers: 1,
     samples: VK_SAMPLE_COUNT_1_BIT,
@@ -348,23 +402,23 @@ proc createTarget*(device: GpuDevice, win: sdl3.Window, width, height: int32): G
     sharingMode: VK_SHARING_MODE_EXCLUSIVE,
     initialLayout: VK_IMAGE_LAYOUT_UNDEFINED,
   )
-  checkVkErr(vkCreateImage(device.device, offImgCI.addr, nil, result.storageImage.addr), "CreateStorageImage")
+  checkVkErr(vkCreateImage(target.device.device, offImgCI.addr, nil, target.storageImage.addr), "CreateStorageImage")
 
   var offMemReqs: VkMemoryRequirements
-  vkGetImageMemoryRequirements(device.device, result.storageImage, offMemReqs.addr)
+  vkGetImageMemoryRequirements(target.device.device, target.storageImage, offMemReqs.addr)
   var offAllocInfo = VkMemoryAllocateInfo(
     sType: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
     allocationSize: offMemReqs.size,
-    memoryTypeIndex: findMemoryType(device.physicalDevice, offMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+    memoryTypeIndex: findMemoryType(target.device.physicalDevice, offMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
   )
-  checkVkErr(vkAllocateMemory(device.device, offAllocInfo.addr, nil, result.storageMemory.addr), "AllocateStorageMemory")
-  checkVkErr(vkBindImageMemory(device.device, result.storageImage, result.storageMemory, 0), "BindStorageMemory")
+  checkVkErr(vkAllocateMemory(target.device.device, offAllocInfo.addr, nil, target.storageMemory.addr), "AllocateStorageMemory")
+  checkVkErr(vkBindImageMemory(target.device.device, target.storageImage, target.storageMemory, 0), "BindStorageMemory")
 
   var viewCI = VkImageViewCreateInfo(
     sType: VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-    image: result.storageImage,
+    image: target.storageImage,
     viewType: VK_IMAGE_VIEW_TYPE_2D,
-    format: result.format,
+    format: target.format,
     subresourceRange: VkImageSubresourceRange(
       aspectMask: VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),
       baseMipLevel: 0,
@@ -373,7 +427,47 @@ proc createTarget*(device: GpuDevice, win: sdl3.Window, width, height: int32): G
       layerCount: 1,
     ),
   )
-  checkVkErr(vkCreateImageView(device.device, viewCI.addr, nil, result.storageView.addr), "CreateStorageImageView")
+  checkVkErr(vkCreateImageView(target.device.device, viewCI.addr, nil, target.storageView.addr), "CreateStorageImageView")
+
+  target.width = actualWidth.int32
+  target.height = actualHeight.int32
+
+# Target & Swapchain API
+proc createTarget*(device: GpuDevice, win: sdl3.Window, width, height: int32): GpuTarget =
+  new(result)
+  result.device = device
+
+  if not vulkanCreateSurface(win, device.instance, nil, result.surface.addr):
+    quit "Failed to create Vulkan surface for GpuTarget"
+
+  result.initSwapchainAndStorage(width, height)
+
+proc resize*(target: GpuTarget, newWidth, newHeight: int32, force: bool = false) =
+  if target == nil or target.device == nil: return
+  if newWidth <= 0 or newHeight <= 0:
+    target.width = 0
+    target.height = 0
+    return
+  if not force and target.width == newWidth and target.height == newHeight:
+    return
+  checkVkErr(vkDeviceWaitIdle(target.device.device), "DeviceWaitIdle before resize")
+  target.destroyStorage()
+  target.initSwapchainAndStorage(newWidth, newHeight)
+
+proc resize*(target: GpuTarget, win: sdl3.Window, force: bool = false) =
+  var w, h: cint
+  if getWindowSizeInPixels(win, w, h):
+    target.resize(w.int32, h.int32, force)
+
+proc destroy*(target: GpuTarget) =
+  if target == nil: return
+  if target.device != nil and target.device.device.int64 != 0:
+    discard vkDeviceWaitIdle(target.device.device)
+    target.destroyStorage()
+    target.destroySwapchain()
+    if target.surface.int64 != 0:
+      vkDestroySurfaceKHR(target.device.instance, target.surface, nil)
+      target.surface = VkSurfaceKHR(0)
 
 # Compute Shader
 proc loadComputeShader*(device: GpuDevice, spvCode: string, entryName: string = "main"): ComputeShader =
@@ -402,16 +496,17 @@ proc loadComputeShader*(device: GpuDevice, spvCode: string, entryName: string = 
   )
   checkVkErr(vkCreateShadersEXT(device.device, 1, shaderCI.addr, nil, result.handle.addr), "CreateShadersEXT")
 
+proc destroy*(shader: ComputeShader) =
+  if shader == nil: return
+  if shader.device != nil and shader.device.device.int64 != 0 and shader.handle.int64 != 0:
+    vkDestroyShaderEXT(shader.device.device, shader.handle, nil)
+    shader.handle = VkShaderEXT(0)
+
 # GpuStream Execution
 proc initGpuStream*(device: GpuDevice): GpuStream =
   new(result)
   result.device = device
 
-  var cmdPoolCI = VkCommandPoolCreateInfo(
-    sType: VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-    flags: VkCommandPoolCreateFlags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT),
-    queueFamilyIndex: device.queueFamilyIndex,
-  )
   var cmdAllocInfo = VkCommandBufferAllocateInfo(
     sType: VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
     commandPool: device.cmdPool,
@@ -427,14 +522,37 @@ proc initGpuStream*(device: GpuDevice): GpuStream =
   checkVkErr(vkCreateSemaphore(device.device, semCI.addr, nil, result.renderFinishedSem.addr), "CreateSemaphore")
   checkVkErr(vkCreateFence(device.device, fenceCI.addr, nil, result.inFlightFence.addr), "CreateFence")
 
-proc beginFrame*(stream: GpuStream, target: GpuTarget): bool =
-  checkVkErr(vkWaitForFences(stream.device.device, 1, stream.inFlightFence.addr, VK_TRUE, uint64.high), "WaitForFences")
-  checkVkErr(vkResetFences(stream.device.device, 1, stream.inFlightFence.addr), "ResetFences")
+proc destroy*(stream: GpuStream) =
+  if stream == nil: return
+  if stream.device != nil and stream.device.device.int64 != 0:
+    discard vkDeviceWaitIdle(stream.device.device)
+    if stream.imageAvailableSem.int64 != 0:
+      vkDestroySemaphore(stream.device.device, stream.imageAvailableSem, nil)
+      stream.imageAvailableSem = VkSemaphore(0)
+    if stream.renderFinishedSem.int64 != 0:
+      vkDestroySemaphore(stream.device.device, stream.renderFinishedSem, nil)
+      stream.renderFinishedSem = VkSemaphore(0)
+    if stream.inFlightFence.int64 != 0:
+      vkDestroyFence(stream.device.device, stream.inFlightFence, nil)
+      stream.inFlightFence = VkFence(0)
+    if stream.cmdBuffer.int64 != 0:
+      var buf = stream.cmdBuffer
+      vkFreeCommandBuffers(stream.device.device, stream.device.cmdPool, 1, buf.addr)
+      stream.cmdBuffer = VkCommandBuffer(0)
 
-  let acqRes = vkAcquireNextImageKHR(stream.device.device, target.swapchain, uint64.high, stream.imageAvailableSem, VkFence(0), target.currentSwapImageIndex.addr)
-  if acqRes != VK_SUCCESS:
+proc beginFrame*(stream: GpuStream, target: GpuTarget): bool =
+  if target.width <= 0 or target.height <= 0 or target.swapchain.int64 == 0:
     return false
 
+  checkVkErr(vkWaitForFences(stream.device.device, 1, stream.inFlightFence.addr, VK_TRUE, uint64.high), "WaitForFences")
+
+  let acqRes = vkAcquireNextImageKHR(stream.device.device, target.swapchain, uint64.high, stream.imageAvailableSem, VkFence(0), target.currentSwapImageIndex.addr)
+  if acqRes == VK_ERROR_OUT_OF_DATE_KHR:
+    return false
+  elif acqRes != VK_SUCCESS and acqRes != VK_SUBOPTIMAL_KHR:
+    quit fmt"Vulkan error in vkAcquireNextImageKHR: {acqRes.int32}"
+
+  checkVkErr(vkResetFences(stream.device.device, 1, stream.inFlightFence.addr), "ResetFences")
   checkVkErr(vkResetCommandBuffer(stream.cmdBuffer, VkCommandBufferResetFlags(0)), "ResetCommandBuffer")
   var beginInfo = VkCommandBufferBeginInfo(sType: VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO)
   checkVkErr(vkBeginCommandBuffer(stream.cmdBuffer, beginInfo.addr), "BeginCommandBuffer")
@@ -497,7 +615,7 @@ proc dispatch*[PushT: object](
   # 5. Dispatch
   vkCmdDispatch(stream.cmdBuffer, workgroupsX, workgroupsY, workgroupsZ)
 
-proc present*(stream: GpuStream, target: GpuTarget) =
+proc present*(stream: GpuStream, target: GpuTarget): bool {.discardable.} =
   # 1. Barrier: Transition storage image to TRANSFER_SRC and swapchain image to TRANSFER_DST
   var barriers = [
     VkImageMemoryBarrier2(
@@ -612,7 +730,12 @@ proc present*(stream: GpuStream, target: GpuTarget) =
     pSwapchains: target.swapchain.addr,
     pImageIndices: target.currentSwapImageIndex.addr,
   )
-  discard vkQueuePresentKHR(stream.device.queue, presentInfo.addr)
+  let presRes = vkQueuePresentKHR(stream.device.queue, presentInfo.addr)
+  if presRes == VK_ERROR_OUT_OF_DATE_KHR or presRes == VK_SUBOPTIMAL_KHR:
+    return false
+  elif presRes != VK_SUCCESS:
+    quit fmt"Vulkan error in vkQueuePresentKHR: {presRes.int32}"
+  return true
 
 proc readbackTargetPPM*(stream: GpuStream, target: GpuTarget, outputPath: string) =
   ## Headless/debug capture helper: reads back target.storageImage and saves to PPM.
