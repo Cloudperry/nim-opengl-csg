@@ -19,17 +19,21 @@ This checklist tracks the implementation of the Vulkan 1.4 compute stream port o
 - [x] Implement robust surface lifecycle, leak-free device probing, and window resize handling (`target.resize(w, h)`).
 - [x] Decouple `stream.dispatch` from `GpuTarget` for general compute (pure BDA dispatches, multi-pass pipelines).
 - [x] Implement `bindTarget`, `clearTarget`, and `barrierComputeToCompute` / `barrier` for multi-pass compute pipelines.
-- [x] Implement multi-pass compute particle simulation example app (`tests/TestCheckpoint1.nim`) with 200,000 GPU-simulated particles, organic harmonic flow field, smooth cosine color palette fading, and compute rasterization.
+- [x] Implement multi-pass compute particle simulation example app (`tests/TestCheckpoint1.nim`) with 500k+ GPU-simulated particles, organic harmonic flow field, sunset color gradient, and compute rasterization.
+- [x] Implement 20-second stress benchmark and confutils CLI options.
 - [ ] Add layout validation tag/flag to shader output compiled through the Nim Slang API (validate at load time so layouts cannot silently mismatch).
 
-### [ ] Checkpoint 2: Full SDF Slang Shader BDA Migration & Reflection Test
-- [ ] Refactor `shaders/SdfRenderer.slang` to use 64-bit BDA pointers in push constants (`SdfPushParams`).
-- [ ] Replace structured buffer indexing with direct pointer dereferencing in Slang.
-- [ ] Invoke `importSlangShader` on the full SDF shader and verify type generation for `SceneUniforms`, `DebugSettings`, `Material`, `SdfInstruction`, `PointLight`, and `SdfPushParams`.
-- [ ] Verify SPIR-V compilation with `VK_EXT_shader_object` compatibility.
+### [x] Checkpoint 2: Full SDF Slang Shader BDA Migration & Reflection Test
+- [x] Refactor `shaders/SdfRenderer.slang` into modern Vulkan 1.4 BDA shader (`shaders/SdfRendererVk.slang`) using 64-bit BDA pointers in push constants (`SdfPushParams`).
+- [x] Replace structured buffer indexing with direct pointer dereferencing in Slang (`push.prog[i]`, `push.pointLights[i]`, `READ_FLOAT(push.progArgs, ...)`).
+- [x] Implement direct `treeform/vmath` vector and matrix mapping (`Vec2..4`, `IVec2..4`, `UVec2..4`, `Mat2..4`) in `src/SlangIntegration.nim`.
+- [x] Add `SlangValueType` parse hook for string/struct pointer `valueType` in Slang reflection JSON.
+- [x] Add recursive module dependency tracking (`import <mod>;`, `#include`) in `compileSlangShader`.
+- [x] Create standalone reflection test (`tests/TestCheckpoint2.nim`) asserting type generation and byte parity for `SceneUniforms`, `DebugSettings`, `Material`, `SdfProgramData`, `SdfInstruction`, `PointLight`, and `SdfPushParams`.
+- [x] Verify SPIR-V compilation and `VK_EXT_shader_object` compute shader loading on Vulkan 1.4 hardware.
 
 ### [ ] Checkpoint 3: SdfRenderer CPU-Side Port & Visual Parity Verification
-- [ ] Replace OpenGL allocations with `GpuSlice[T]` in `SdfRenderer.nim``.
+- [ ] Replace OpenGL allocations with `GpuSlice[T]` in `SdfRenderer.nim`.
 - [ ] Wire camera uniforms, dynamic objects, and CSG instruction buffer into mapped VRAM.
 - [ ] Record dispatches and present passes on `GpuStream`.
 - [ ] Run automated visual diff (`tests/diff_images.py`) against all 5 golden images (target: MSE < 0.5).
@@ -38,7 +42,7 @@ This checklist tracks the implementation of the Vulkan 1.4 compute stream port o
 - [ ] Automated input tests (camera movement, mode switching hotkeys).
 - [ ] Window resizing validation under Wayland / X11 (swapchain recreation).
 - [ ] Remove legacy OpenGL files (`src/GlUtils.nim`, `src/glad/`).
-- [ ] Update Nimble configuration and merge `vulkan-port` branch back to `dev`.
+- [ ] Update Nimble configuration and merge `vulkan-port` branch back to `dev``.
 
 ---
 
@@ -76,9 +80,20 @@ The following issues were identified during architectural and system reviews:
 
 ---
 
-## Future Work
+## Future Work & Architectural Optimizations
+
+- [ ] **Uniform Memory Mechanism Optimization (UBO Cache Hierarchy for Uniform-like Data)**:
+  - Make sure data that could be put into uniforms is passed using a mechanism that utilizes the same GPU memory systems and caching paths that UBOs use (scalar cache / SMEM / Kcache).
+  - Investigate and benchmark:
+    1. Inlining small, frame-invariant uniforms (`SceneUniforms` 108B, `DebugSettings` 4B) directly into the push constant block / hardware user registers.
+    2. Using Vulkan 1.4 Push Descriptors (`vkCmdPushDescriptorSetKHR`) with `ConstantBuffer<T>` for larger blocks (`SdfProgramData` 4KB) to leverage hardware constant cache without descriptor pool overhead.
+    3. Evaluating BDA `const` / `NonWritable` pointer qualifiers and memory invariance hints to allow compiler promotion of uniform BDA loads to scalar instructions on RDNA/GCN.
+- [ ] **Color Evaluation Decoupling & CSG Op Weight Unification in `Sdf.slang`**:
+  - Clean up color evaluation logic with the design assumption that every SDF hit evaluates color, but ensure the color evaluation function is swappable/configurable.
+  - Move SDF CSG operation weight evaluation directly into `shaders/Sdf.slang`.
+  - Investigate and reuse the CSG weight evaluation function for the mathematical blending of smooth CSG operations (`opSmoothUnion`, `opSmoothSubtraction`, `opSmoothIntersection`).
 - [ ] **Compile-Time Struct Layout Verification**:
-  - Add compile-time verification in `importSlangShader` (`offsetOf(NimType, field) == slangField.binding.offset` and `sizeof(NimType) == slangStruct.sizes[0].value`) with clear compiler diagnostics.
+  - Add compile-time verification in `SlangIntegration.nim` (`offsetOf(NimType, field) == slangField.binding.offset` and `sizeof(NimType) == slangStruct.sizes[0].value`) with clear compiler diagnostics.
 - [ ] **Zero-Copy Swapchain Storage Image**:
   - Investigate direct rendering into swapchain images created with `VK_IMAGE_USAGE_STORAGE_BIT` where supported by drivers/WSI, bypassing the `vkCmdCopyImage2` present step.
 - [ ] **`VK_EXT_descriptor_heap` Support for Many Image Targets / Bindless**:
