@@ -65,3 +65,15 @@ The following issues were identified during architectural and system reviews:
 - [x] **Hardcoded `"main"` in `loadComputeShader`**:
   - *Identified*: The `entryName` argument in `loadComputeShader` was ignored and `"main"` was hardcoded in `VkShaderCreateInfoEXT`.
   - *Fix Applied*: `entryName.cstring` is passed to `pName` in `VkShaderCreateInfoEXT`.
+
+---
+
+## Future Work
+- [ ] **Compile-Time Struct Layout Verification**:
+  - Add compile-time verification in `importSlangShader` (`offsetOf(NimType, field) == slangField.binding.offset` and `sizeof(NimType) == slangStruct.sizes[0].value`) with clear compiler diagnostics.
+- [ ] **Zero-Copy Swapchain Storage Image**:
+  - Investigate direct rendering into swapchain images created with `VK_IMAGE_USAGE_STORAGE_BIT` where supported by drivers/WSI, bypassing the `vkCmdCopyImage2` present step.
+- [ ] **Decoupled Multi-Pass Compute Dispatches**:
+  - Generalize `stream.dispatch` to support arbitrary buffer-to-buffer and multi-texture compute passes (e.g. bounding hierarchy acceleration, ray marching, and post-processing).
+- [ ] **`VK_EXT_descriptor_heap` Support for Many Image Targets / Bindless**:
+  - Add support for `VK_EXT_descriptor_heap` (`SPV_EXT_descriptor_heap`) if the compute pipeline expands to require many dynamic image/texture targets or bindless material resources, replacing push descriptors with D3D12-style `ResourceDescriptorHeap[i]` access in Slang.
