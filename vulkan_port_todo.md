@@ -62,6 +62,8 @@ The following issues were identified during architectural and system reviews:
   - *Fix Applied*: Upgraded submission to `vkQueueSubmit2` and set semaphore wait stage strictly to `VK_PIPELINE_STAGE_2_TRANSFER_BIT`.
 
 ### 🟠 High Priority / Ergonomics
+- [ ] Check if VSync on/off is handled correctly and add an option for it
+- [ ] Check how to properly use barriers and deviceWaitIdle to make sure there are no race conditions
 - [x] **`dispatch` Hardcoded to `GpuTarget` & Multi-Pass Support**:
   - *Identified*: `stream.dispatch` previously required passing `target: GpuTarget` and automatically bound descriptor binding 0 to `target.storageView`. Multi-pass compute pipelines require pure buffer-to-buffer dispatches, multiple targets, and image clearing.
   - *Fix Applied*: Decoupled `stream.dispatch` into:
@@ -98,3 +100,4 @@ The following issues were identified during architectural and system reviews:
   - Investigate direct rendering into swapchain images created with `VK_IMAGE_USAGE_STORAGE_BIT` where supported by drivers/WSI, bypassing the `vkCmdCopyImage2` present step.
 - [ ] **`VK_EXT_descriptor_heap` Support for Many Image Targets / Bindless**:
   - Add support for `VK_EXT_descriptor_heap` (`SPV_EXT_descriptor_heap`) if the compute pipeline expands to require many dynamic image/texture targets or bindless material resources, replacing push descriptors with D3D12-style `ResourceDescriptorHeap[i]` access in Slang.
+- [ ] If there is more simulation work on the CPU, add possibility of having 2 frames in flight to overlap CPU and GPU work. Currently only 1 frame is being rendered at once and the renderer waits for GPU to be idle before starting a new frame.

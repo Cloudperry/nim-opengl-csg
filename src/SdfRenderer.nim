@@ -297,6 +297,7 @@ proc draw(conf: Config) =
     sdfRenderer.target.resize(win, force = true)
     return
 
+  # TODO: ALL WRITES TO BDA BUFFERS NEED TO HAPPEN IN BETWEEN beginFrame AND present OR RACE CONDITIONS WILL HAPPEN. CHECK HOW TO HANDLE THIS PROPERLY.
   updateSceneDynamicArgs()
 
   let w = sdfRenderer.target.width
