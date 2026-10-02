@@ -9,6 +9,7 @@
 # Ignore Slang generated shader files
 *.glsl
 *.spv
+*.reflection.json
 
 # Ignore RenderDoc files
 *.cap

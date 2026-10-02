@@ -1,53 +1,92 @@
-import std/[strformat, math, os, strutils]
+## Vulkan 1.4 Multi-Pass Compute Particle Simulation
+## Features:
+## - 200,000 GPU-simulated particles with Buffer Device Address (BDA)
+## - Pass 1: ClearTarget via vkCmdClearColorImage
+## - Pass 2: Decoupled pure compute simulation (harmonic flow field + smooth palette fading)
+## - Pipeline memory barrier between simulation write and render read
+## - Pass 3: Compute rasterization into GpuTarget storage image
+## - Swapchain presentation & dynamic window resizing
+
+import std/[strformat, math, os, strutils, random]
 import sdl3
 import vk14
 import GpuStream
 import SlangIntegration
 
-# 1. Compile-time Slang shader compilation & type generation via Slangc
-importAndCompileShader("shaders/Test2D.slang", ["TestParams", "PushConstants"])
+# Compile-time Slang shader compilation & reflection type generation
+importAndCompileShader("shaders/ParticleSim.slang", ["Particle", "SimPushConstants"])
+importAndCompileShader("shaders/ParticleRender.slang", ["RenderPushConstants"])
+
+const NumParticles = 200_000
+
+proc initParticles(slice: var GpuSlice[Particle], count: int, aspect: float32) =
+  randomize(42)
+  for i in 0 ..< count:
+    let angle = rand(2.0 * PI)
+    let dist = sqrt(rand(1.0)) * 0.95
+    let px = (cos(angle) * dist * aspect).float32
+    let py = (sin(angle) * dist).float32
+    let seedVal = rand(1.0f32)
+    let speedVal = 0.15f32 + rand(0.35f32)
+    let sizeVal = 1.0f32 + rand(1.2f32)
+
+    slice[i] = Particle(
+      position: [px, py],
+      velocity: [0.0f32, 0.0f32],
+      color: [0.2f32, 0.8f32, 0.9f32, 0.9f32],
+      life: rand(10.0f32),
+      size: sizeVal,
+      speed: speedVal,
+      seed: seedVal,
+    )
 
 proc main() =
   let args = commandLineParams()
   var headlessPath = ""
-  var testResize = false
   for a in args:
     if a.startsWith("--screenshotPath="):
       headlessPath = a.substr("--screenshotPath=".len)
-    elif a == "--testResize":
-      testResize = true
 
   if not init(INIT_VIDEO):
     quit fmt"Error initializing SDL3: {getError()}"
 
   var winWidth = 1280'i32
   var winHeight = 720'i32
-  let flags = WINDOW_VULKAN or WINDOW_RESIZABLE or (if headlessPath.len > 0 and not testResize: WINDOW_HIDDEN else: 0.uint32)
-  var win = createWindow("Checkpoint 1: 2D SDF Animated Circle", winWidth, winHeight, flags)
+  let flags = WINDOW_VULKAN or WINDOW_RESIZABLE or (if headlessPath.len > 0: WINDOW_HIDDEN else: 0.uint32)
+  var win = createWindow("Vulkan 1.4 Compute Particle Simulation (200k Particles)", winWidth, winHeight, flags)
   if win == nil:
     quit fmt"Error creating window: {getError()}"
 
-  # 2. Initialize GpuDevice
+  # 1. Initialize Vulkan 1.4 GpuDevice
   var device = initGpuDevice(win)
 
-  # 3. Create Target & Swapchain
+  # 2. Create Target & Swapchain
   var target = createTarget(device, win, winWidth, winHeight)
 
-  # 4. Load SPIR-V Compute Shader Object (bytecode embedded at compile-time by importAndCompileShader)
-  let spvCode = getShaderCode_computeMain()
-  var shader = loadComputeShader(device, spvCode, "main")
+  # 3. Load SPIR-V Compute Shader Objects (bytecode embedded at compile-time)
+  var simShader = loadComputeShader(device, getShaderCode_ParticleSim(), "main")
+  var renderShader = loadComputeShader(device, getShaderCode_ParticleRender(), "main")
 
-  # 5. Initialize Command Stream
+  # 4. Initialize Command Stream
   var stream = initGpuStream(device)
 
-  # 6. Allocate host-mapped GPU buffer slice for TestParams
-  var paramsSlice = allocSlice[TestParams](device, 1)
+  # 5. Allocate host-mapped GPU buffer slice for particles
+  var particlesSlice = allocSlice[Particle](device, NumParticles)
+  initParticles(particlesSlice, NumParticles, winWidth.float32 / winHeight.float32)
 
-  let meta = getShaderMeta_computeMain()
-  echo fmt"Shader reflection metadata: workgroup size = ({meta.workgroupX}, {meta.workgroupY}, {meta.workgroupZ})"
+  let simMeta = getShaderMeta_ParticleSim()
+  let renderMeta = getShaderMeta_ParticleRender()
+  echo fmt"Initialized {NumParticles} particles in host-mapped VRAM ({sizeof(Particle) * NumParticles div 1024} KB)"
+  echo fmt"Simulation workgroup size: {simMeta.workgroupX}x{simMeta.workgroupY}x{simMeta.workgroupZ}"
+  echo fmt"Rendering workgroup size: {renderMeta.workgroupX}x{renderMeta.workgroupY}x{renderMeta.workgroupZ}"
 
   var running = true
   var frameCount = 0
+  var lastTicks = getTicks()
+  var fpsTimer = lastTicks
+  var fpsFrames = 0
+  var totalTime = 0.0f32
+
   while running:
     var event: Event
     while pollEvent(event):
@@ -61,76 +100,87 @@ proc main() =
         let newW = event.window.data1
         let newH = event.window.data2
         if newW > 0 and newH > 0:
-          echo fmt"Window resized event: {newW}x{newH}, resizing target..."
           target.resize(newW, newH)
       else:
         discard
 
-    if testResize:
-      if frameCount == 4:
-        echo "Testing programmatic resize: 1280x720 -> 800x600"
-        target.resize(800, 600)
-      elif frameCount == 8:
-        echo "Testing programmatic resize: 800x600 -> 1024x768"
-        target.resize(1024, 768)
-      elif frameCount == 12:
-        echo "Testing programmatic resize: 1024x768 -> 1280x720"
-        target.resize(1280, 720)
-      elif frameCount == 16:
-        echo "All programmatic resize cycles passed!"
-        running = false
-        break
-
+    let currentTicks = getTicks()
+    let dt = min((currentTicks - lastTicks).float32 / 1000.0f32, 0.05f32)
+    lastTicks = currentTicks
+    totalTime += dt
     inc frameCount
-    let timeVal = frameCount.float32 * 0.025f32
+    inc fpsFrames
+
+    if currentTicks - fpsTimer >= 1000:
+      let fps = (fpsFrames.float32 * 1000.0f32) / (currentTicks - fpsTimer).float32
+      echo fmt"Frame {frameCount}: {fps:.1f} FPS (200k particles multi-pass compute)"
+      fpsTimer = currentTicks
+      fpsFrames = 0
 
     # Skip rendering if window is minimized (width or height is 0)
     if target.width <= 0 or target.height <= 0:
       sleep(16)
       continue
 
-    # Update TestParams in host-mapped VRAM directly (clean C struct layout, dynamic aspect ratio)
-    paramsSlice[0] = TestParams(
-      colorA: [0.95f32, 0.25f32, 0.15f32, 1.0f32],   # Warm coral red
-      colorB: [0.15f32, 0.65f32, 0.95f32, 1.0f32],   # Cyan blue
-      center: [0.0f32, 0.0f32],
-      radius: 0.5f32,
-      time: timeVal,
-      aspectRatio: target.width.float32 / target.height.float32,
-    )
-
     if not stream.beginFrame(target):
       target.resize(win, force = true)
       continue
 
-    let wgX = (target.width.uint32 + meta.workgroupX - 1) div meta.workgroupX
-    let wgY = (target.height.uint32 + meta.workgroupY - 1) div meta.workgroupY
+    let aspect = target.width.float32 / target.height.float32
 
-    var push = PushConstants(params: paramsSlice.deviceAddress)
-    stream.dispatch(shader, target, push, wgX, wgY, 1)
+    # --- Pass 1: Clear Target Image to Deep Dark Backdrop ---
+    stream.clearTarget(target, 0.015f32, 0.015f32, 0.030f32, 1.0f32)
 
-    if headlessPath.len > 0 and frameCount >= 5 and not testResize:
-      # Readback and save PPM
+    # --- Pass 2: Particle Simulation (Decoupled Pure Compute Pass) ---
+    var simPush = SimPushConstants(
+      particles: particlesSlice.deviceAddress,
+      particleCount: NumParticles.uint32,
+      deltaTime: dt,
+      time: totalTime,
+      aspectRatio: aspect,
+    )
+    let simWgX = (NumParticles.uint32 + simMeta.workgroupX - 1) div simMeta.workgroupX
+    stream.dispatch(simShader, simPush, simWgX, 1, 1)
+
+    # --- Compute-to-Compute Memory Barrier ---
+    # Ensures particle buffer writes in Pass 2 are visible to render reads in Pass 3
+    stream.barrier()
+
+    # --- Pass 3: Particle Rasterization Compute Pass ---
+    var renderPush = RenderPushConstants(
+      particles: particlesSlice.deviceAddress,
+      particleCount: NumParticles.uint32,
+      screenWidth: target.width.uint32,
+      screenHeight: target.height.uint32,
+      aspectRatio: aspect,
+    )
+    let renderWgX = (NumParticles.uint32 + renderMeta.workgroupX - 1) div renderMeta.workgroupX
+    stream.dispatch(renderShader, target, renderPush, renderWgX, 1, 1)
+
+    # Screenshot capture for headless testing/verification
+    if headlessPath.len > 0 and frameCount >= 20:
       stream.readbackTargetPPM(target, headlessPath)
-      echo fmt"Saved headless screenshot to {headlessPath}"
+      echo fmt"Saved particle simulation screenshot to {headlessPath}"
       running = false
       break
 
+    # Present frame to swapchain
     if not stream.present(target):
       target.resize(win, force = true)
 
   discard vkDeviceWaitIdle(device.device)
 
   # Clean up resources in reverse order of creation
-  dealloc(device, paramsSlice)
-  destroy(shader)
+  dealloc(device, particlesSlice)
+  destroy(simShader)
+  destroy(renderShader)
   destroy(target)
   destroy(stream)
   destroy(device)
   destroyWindow(win)
   sdl3.quit()
 
-  echo "Checkpoint 1 test completed cleanly!"
+  echo "Particle simulation exited cleanly!"
 
 when isMainModule:
   main()

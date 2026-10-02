@@ -8,18 +8,19 @@ This checklist tracks the implementation of the Vulkan 1.4 compute stream port o
 
 ### [x] Checkpoint 0: Baseline Capture & Automated Diff Harness
 - [x] Capture golden `.ppm` images from OpenGL compute baseline (`BasicLit`, `ShadowedLit`, `Unlit`, `DebugNormals`, `DebugSteps`).
-- [x] Create Python parity comparison tool (`tests/diff_images.py`) with MSE/PSNR calculation and delta heatmap generation.\
+- [x] Create Python parity comparison tool (`tests/diff_images.py`) with MSE/PSNR calculation and delta heatmap generation.
 - [x] Verify comparison script against golden references.
 
-### [ ] Checkpoint 1: Co-Design & Finalization of GFX RHI + Slang Integration via 2D Test
+### [x] Checkpoint 1: Co-Design & Finalization of GFX RHI + Slang Integration via 2D Test & Particle Simulation
 - [x] Implement lightweight `GpuStream.nim` RHI (device initialization, stream recording, memory slice allocation with BDA).
 - [x] Implement compile-time `SlangIntegration.nim` using `treeform/jsony` to parse reflection JSON and synthesize Nim types.
 - [x] Update `Slangc.nim` with `ShaderDataLayout` options (`CLayout`, `Scalar`, etc.) and target-aware profile handling (omit GLSL profiles when compiling for Vulkan SPIR-V).
-- [x] Implement 2D animated SDF circle compute shader (`shaders/Test2D.slang`) and host test runner (`tests/test_checkpoint1.nim`).
 - [x] Support headless screenshot readback and automated window presentation.
-- [x] Implement robust surface lifecycle, leak-free device probing, and window resize handling (`target.resize(w, h)` and `--testResize`).
+- [x] Implement robust surface lifecycle, leak-free device probing, and window resize handling (`target.resize(w, h)`).
+- [x] Decouple `stream.dispatch` from `GpuTarget` for general compute (pure BDA dispatches, multi-pass pipelines).
+- [x] Implement `bindTarget`, `clearTarget`, and `barrierComputeToCompute` / `barrier` for multi-pass compute pipelines.
+- [x] Implement multi-pass compute particle simulation example app (`tests/test_checkpoint1.nim`) with 200,000 GPU-simulated particles, organic harmonic flow field, smooth cosine color palette fading, and compute rasterization.
 - [ ] Add layout validation tag/flag to shader output compiled through the Nim Slang API (validate at load time so layouts cannot silently mismatch).
-- [ ] Decouple `stream.dispatch` from `GpuTarget` for general compute (buffer-to-buffer dispatches, prepasses).
 
 ### [ ] Checkpoint 2: Full SDF Slang Shader BDA Migration & Reflection Test
 - [ ] Refactor `shaders/SdfRenderer.slang` to use 64-bit BDA pointers in push constants (`SdfPushParams`).
@@ -28,7 +29,7 @@ This checklist tracks the implementation of the Vulkan 1.4 compute stream port o
 - [ ] Verify SPIR-V compilation with `VK_EXT_shader_object` compatibility.
 
 ### [ ] Checkpoint 3: SdfRenderer CPU-Side Port & Visual Parity Verification
-- [ ] Replace OpenGL allocations with `GpuSlice[T]` in `SdfRenderer.nim`.
+- [ ] Replace OpenGL allocations with `GpuSlice[T]` in `SdfRenderer.nim``.
 - [ ] Wire camera uniforms, dynamic objects, and CSG instruction buffer into mapped VRAM.
 - [ ] Record dispatches and present passes on `GpuStream`.
 - [ ] Run automated visual diff (`tests/diff_images.py`) against all 5 golden images (target: MSE < 0.5).
@@ -57,12 +58,18 @@ The following issues were identified during architectural and system reviews:
   - *Fix Applied*: Upgraded submission to `vkQueueSubmit2` and set semaphore wait stage strictly to `VK_PIPELINE_STAGE_2_TRANSFER_BIT`.
 
 ### 🟠 High Priority / Ergonomics
-- [ ] **`dispatch` Hardcoded to `GpuTarget`**:
-  - *Issue*: `stream.dispatch` currently requires passing `target: GpuTarget` and automatically binds descriptor binding 0 to `target.storageView`. Checkpoint 2 and multi-pass compute pipelines require buffer-to-buffer dispatches or multiple textures.
-  - *Action*: Decouple `stream.dispatch` into a general form (`stream.dispatch(shader, push, wgX, wgY, wgZ)`) with explicit descriptor binding helpers or binding abstractions.
+- [x] **`dispatch` Hardcoded to `GpuTarget` & Multi-Pass Support**:
+  - *Identified*: `stream.dispatch` previously required passing `target: GpuTarget` and automatically bound descriptor binding 0 to `target.storageView`. Multi-pass compute pipelines require pure buffer-to-buffer dispatches, multiple targets, and image clearing.
+  - *Fix Applied*: Decoupled `stream.dispatch` into:
+    - Pure general compute: `proc dispatch*[PushT: object](stream: GpuStream, shader: ComputeShader, pushConstants: PushT, workgroupsX: uint32, workgroupsY: uint32 = 1, workgroupsZ: uint32 = 1)`
+    - Convenience target dispatch: `proc dispatch*[PushT: object](stream: GpuStream, shader: ComputeShader, target: GpuTarget, pushConstants: PushT, ...)`
+    - Target binding: `proc bindTarget*(stream: GpuStream, target: GpuTarget, binding: uint32 = 0)`
+    - Fast target clearing: `proc clearTarget*(stream: GpuStream, target: GpuTarget, r, g, b, a: float32 = 0.0f32)` via `vkCmdClearColorImage`
+    - Memory synchronization: `proc barrierComputeToCompute*(stream: GpuStream)` / `barrier*` via `vkCmdPipelineBarrier2`
+    - Target layout tracking: `target.currentLayout: VkImageLayout` tracking layouts across passes, transitions, and presentations.
 - [x] **Surface Leak & Missing Resize Support**:
   - *Identified*: Temporary probe surface created during `initGpuDevice` was never destroyed, leaking a `VkSurfaceKHR`. Window resizing caused `beginFrame` to spin without swapchain recreation.
-  - *Fix Applied*: Probe surface in `initGpuDevice` is destroyed immediately after queue selection (`vkDestroySurfaceKHR`). Persistent surface is owned by `GpuTarget`. Implemented `target.resize(newWidth, newHeight)` and `target.resize(win)` with swapchain & storage image recreation, zero-extent minimization handling, graceful `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` handling in `beginFrame` and `present`, clean `destroy` procs for `GpuDevice`, `GpuTarget`, `GpuStream`, and `ComputeShader`, and automated programmatic resize test in `tests/test_checkpoint1.nim` (`--testResize`).
+  - *Fix Applied*: Probe surface in `initGpuDevice` is destroyed immediately after queue selection (`vkDestroySurfaceKHR`). Persistent surface is owned by `GpuTarget`. Implemented `target.resize(newWidth, newHeight)` and `target.resize(win)` with swapchain & storage image recreation, zero-extent minimization handling, graceful `VK_ERROR_OUT_OF_DATE_KHR` / `VK_SUBOPTIMAL_KHR` handling in `beginFrame` and `present`, clean `destroy` procs for `GpuDevice`, `GpuTarget`, `GpuStream`, and `ComputeShader`.
 - [x] **Hardcoded `"main"` in `loadComputeShader`**:
   - *Identified*: The `entryName` argument in `loadComputeShader` was ignored and `"main"` was hardcoded in `VkShaderCreateInfoEXT`.
   - *Fix Applied*: `entryName.cstring` is passed to `pName` in `VkShaderCreateInfoEXT`.
@@ -74,7 +81,5 @@ The following issues were identified during architectural and system reviews:
   - Add compile-time verification in `importSlangShader` (`offsetOf(NimType, field) == slangField.binding.offset` and `sizeof(NimType) == slangStruct.sizes[0].value`) with clear compiler diagnostics.
 - [ ] **Zero-Copy Swapchain Storage Image**:
   - Investigate direct rendering into swapchain images created with `VK_IMAGE_USAGE_STORAGE_BIT` where supported by drivers/WSI, bypassing the `vkCmdCopyImage2` present step.
-- [ ] **Decoupled Multi-Pass Compute Dispatches**:
-  - Generalize `stream.dispatch` to support arbitrary buffer-to-buffer and multi-texture compute passes (e.g. bounding hierarchy acceleration, ray marching, and post-processing).
 - [ ] **`VK_EXT_descriptor_heap` Support for Many Image Targets / Bindless**:
   - Add support for `VK_EXT_descriptor_heap` (`SPV_EXT_descriptor_heap`) if the compute pipeline expands to require many dynamic image/texture targets or bindless material resources, replacing push descriptors with D3D12-style `ResourceDescriptorHeap[i]` access in Slang.

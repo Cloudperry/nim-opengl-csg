@@ -136,6 +136,7 @@ macro importAndCompileShader*(
   # Track shader source file as compile-time dependency for cache invalidation
   discard staticRead(resolvedSlang)
 
+  let (_, shaderBaseName, _) = splitFile(resolvedSlang)
   let baseName = if resolvedSlang.endsWith(".slang"): resolvedSlang[0 .. ^7] else: resolvedSlang
   let reflPath = baseName & ".reflection.json"
 
@@ -182,7 +183,7 @@ macro importAndCompileShader*(
 
   result.add(typeSection)
 
-  # Generate workgroup and metadata helper
+  # Generate workgroup and metadata helpers (both shader-specific and entrypoint-named)
   if refl.entryPoints.len > 0:
     let ep = refl.entryPoints[0]
     let tg = ep.threadGroupSize
@@ -190,24 +191,24 @@ macro importAndCompileShader*(
     let tgY = if tg.len > 1: tg[1] else: 1
     let tgZ = if tg.len > 2: tg[2] else: 1
 
-    let metaIdent = ident("getShaderMeta_" & ep.name)
-    let metaProc = quote do:
-      proc `metaIdent`*(): tuple[workgroupX, workgroupY, workgroupZ: uint32] =
+    let metaIdentShader = ident("getShaderMeta_" & shaderBaseName)
+    let metaProcShader = quote do:
+      proc `metaIdentShader`*(): tuple[workgroupX, workgroupY, workgroupZ: uint32] =
         (`tgX`.uint32, `tgY`.uint32, `tgZ`.uint32)
-    result.add(metaProc)
+    result.add(metaProcShader)
 
-  # Also provide helpers to get the compiled shader binary path and compiled bytecode
+  # Path helpers
   let spvPathLit = opts.outFile
-  let pathProcIdent = ident("getShaderBinaryPath_" & entryPoint)
+  let pathProcShader = ident("getShaderBinaryPath_" & shaderBaseName)
   let pathProc = quote do:
-    proc `pathProcIdent`*(): string = `spvPathLit`
+    proc `pathProcShader`*(): string = `spvPathLit`
   result.add(pathProc)
 
-  # Read compiled bytecode at compile-time and embed directly as string literal
+  # Compiled bytecode embedded at compile-time
   let spvBytes = staticRead(opts.outFile)
-  let codeProcIdent = ident("getShaderCode_" & entryPoint)
+  let codeProcShader = ident("getShaderCode_" & shaderBaseName)
   let codeProc = quote do:
-    proc `codeProcIdent`*(): string = `spvBytes`
+    proc `codeProcShader`*(): string = `spvBytes`
   result.add(codeProc)
 
 template importSlangShader*(

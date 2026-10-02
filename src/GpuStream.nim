@@ -38,6 +38,7 @@ type
     storageImage*: VkImage
     storageMemory*: VkDeviceMemory
     storageView*: VkImageView
+    currentLayout*: VkImageLayout
     width*, height*: int32
     format*: VkFormat
     swapchain*: VkSwapchainKHR
@@ -262,7 +263,7 @@ proc allocSlice*[T](device: GpuDevice, count: int): GpuSlice[T] =
   vkGetBufferMemoryRequirements(device.device, result.buffer, memReqs.addr)
 
   # Host-visible + coherent + device-local where supported
-  var memTypeIdx = findMemoryType(device.physicalDevice, memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+  var memTypeIdx = findMemoryType(device.physicalDevice, memReqs.memoryTypeBits, (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT.uint32 or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT.uint32))
 
   var allocFlags = VkMemoryAllocateFlagsInfo(
     sType: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
@@ -312,7 +313,7 @@ proc writeSlice*[T](slice: var GpuSlice[T], data: openArray[T], dstOffset = 0) =
 
 # Target & Swapchain Helper Procedures
 proc destroyStorage(target: GpuTarget) =
-  if target.device == nil or target.device.device.int64 == 0: return
+  if target == nil or target.device == nil or target.device.device.int64 == 0: return
   if target.storageView.int64 != 0:
     vkDestroyImageView(target.device.device, target.storageView, nil)
     target.storageView = VkImageView(0)
@@ -322,9 +323,10 @@ proc destroyStorage(target: GpuTarget) =
   if target.storageMemory.int64 != 0:
     vkFreeMemory(target.device.device, target.storageMemory, nil)
     target.storageMemory = VkDeviceMemory(0)
+  target.currentLayout = VK_IMAGE_LAYOUT_UNDEFINED
 
 proc destroySwapchain(target: GpuTarget) =
-  if target.device == nil or target.device.device.int64 == 0: return
+  if target == nil or target.device == nil or target.device.device.int64 == 0: return
   if target.swapchain.int64 != 0:
     vkDestroySwapchainKHR(target.device.device, target.swapchain, nil)
     target.swapchain = VkSwapchainKHR(0)
@@ -346,6 +348,7 @@ proc initSwapchainAndStorage(target: GpuTarget, width, height: int32) =
   if actualWidth == 0 or actualHeight == 0:
     target.width = 0
     target.height = 0
+    target.currentLayout = VK_IMAGE_LAYOUT_UNDEFINED
     return
 
   var formatCount: uint32
@@ -389,6 +392,7 @@ proc initSwapchainAndStorage(target: GpuTarget, width, height: int32) =
   checkVkErr(vkGetSwapchainImagesKHR(target.device.device, target.swapchain, swapImgCount.addr, target.swapchainImages[0].addr), "SwapchainImages")
 
   # Storage image follows swapchain format exactly to eliminate color channel mismatch in vkCmdCopyImage2
+  # Added VK_IMAGE_USAGE_TRANSFER_DST_BIT to allow vkCmdClearColorImage clears
   var offImgCI = VkImageCreateInfo(
     sType: VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
     imageType: VK_IMAGE_TYPE_2D,
@@ -398,7 +402,7 @@ proc initSwapchainAndStorage(target: GpuTarget, width, height: int32) =
     arrayLayers: 1,
     samples: VK_SAMPLE_COUNT_1_BIT,
     tiling: VK_IMAGE_TILING_OPTIMAL,
-    usage: VkImageUsageFlags(VK_IMAGE_USAGE_STORAGE_BIT or VK_IMAGE_USAGE_TRANSFER_SRC_BIT),
+    usage: VkImageUsageFlags(VK_IMAGE_USAGE_STORAGE_BIT or VK_IMAGE_USAGE_TRANSFER_SRC_BIT or VK_IMAGE_USAGE_TRANSFER_DST_BIT),
     sharingMode: VK_SHARING_MODE_EXCLUSIVE,
     initialLayout: VK_IMAGE_LAYOUT_UNDEFINED,
   )
@@ -409,7 +413,7 @@ proc initSwapchainAndStorage(target: GpuTarget, width, height: int32) =
   var offAllocInfo = VkMemoryAllocateInfo(
     sType: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
     allocationSize: offMemReqs.size,
-    memoryTypeIndex: findMemoryType(target.device.physicalDevice, offMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+    memoryTypeIndex: findMemoryType(target.device.physicalDevice, offMemReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT.uint32),
   )
   checkVkErr(vkAllocateMemory(target.device.device, offAllocInfo.addr, nil, target.storageMemory.addr), "AllocateStorageMemory")
   checkVkErr(vkBindImageMemory(target.device.device, target.storageImage, target.storageMemory, 0), "BindStorageMemory")
@@ -431,6 +435,7 @@ proc initSwapchainAndStorage(target: GpuTarget, width, height: int32) =
 
   target.width = actualWidth.int32
   target.height = actualHeight.int32
+  target.currentLayout = VK_IMAGE_LAYOUT_UNDEFINED
 
 # Target & Swapchain API
 proc createTarget*(device: GpuDevice, win: sdl3.Window, width, height: int32): GpuTarget =
@@ -558,50 +563,118 @@ proc beginFrame*(stream: GpuStream, target: GpuTarget): bool =
   checkVkErr(vkBeginCommandBuffer(stream.cmdBuffer, beginInfo.addr), "BeginCommandBuffer")
   return true
 
-proc dispatch*[PushT: object](
-  stream: GpuStream,
-  shader: ComputeShader,
-  target: GpuTarget,
-  pushConstants: PushT,
-  workgroupsX, workgroupsY, workgroupsZ: uint32
-) =
-  # 1. Transition storage image to GENERAL for compute write
-  var b1 = VkImageMemoryBarrier2(
-    sType: VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-    srcStageMask: VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_NONE),
-    srcAccessMask: VkAccessFlags2(VK_ACCESS_2_NONE),
-    dstStageMask: VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT),
-    dstAccessMask: VkAccessFlags2(VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT),
-    oldLayout: VK_IMAGE_LAYOUT_UNDEFINED,
-    newLayout: VK_IMAGE_LAYOUT_GENERAL,
-    image: target.storageImage,
-    subresourceRange: VkImageSubresourceRange(
-      aspectMask: VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),
-      baseMipLevel: 0, levelCount: 1, baseArrayLayer: 0, layerCount: 1,
-    ),
-  )
-  var dep1 = VkDependencyInfo(sType: VK_STRUCTURE_TYPE_DEPENDENCY_INFO, imageMemoryBarrierCount: 1, pImageMemoryBarriers: b1.addr)
-  vkCmdPipelineBarrier2(stream.cmdBuffer, dep1.addr)
+proc bindTarget*(stream: GpuStream, target: GpuTarget, binding: uint32 = 0) =
+  ## Transitions target.storageImage to GENERAL if needed, and pushes it to descriptor set 0 at the specified binding.
+  if target.currentLayout != VK_IMAGE_LAYOUT_GENERAL:
+    var srcStage = VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_NONE)
+    var srcAccess = VkAccessFlags2(VK_ACCESS_2_NONE)
+    if target.currentLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+      srcStage = VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_TRANSFER_BIT)
+      srcAccess = VkAccessFlags2(VK_ACCESS_2_TRANSFER_WRITE_BIT)
+    elif target.currentLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+      srcStage = VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_TRANSFER_BIT)
+      srcAccess = VkAccessFlags2(VK_ACCESS_2_TRANSFER_READ_BIT)
 
-  # 2. Bind Shader Object
-  var stage = VK_SHADER_STAGE_COMPUTE_BIT
-  vkCmdBindShadersEXT(stream.cmdBuffer, 1, stage.addr, shader.handle.addr)
+    var b = VkImageMemoryBarrier2(
+      sType: VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+      srcStageMask: srcStage,
+      srcAccessMask: srcAccess,
+      dstStageMask: VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT),
+      dstAccessMask: VkAccessFlags2(VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT or VK_ACCESS_2_SHADER_STORAGE_READ_BIT),
+      oldLayout: target.currentLayout,
+      newLayout: VK_IMAGE_LAYOUT_GENERAL,
+      image: target.storageImage,
+      subresourceRange: VkImageSubresourceRange(
+        aspectMask: VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),
+        baseMipLevel: 0, levelCount: 1, baseArrayLayer: 0, layerCount: 1,
+      ),
+    )
+    var dep = VkDependencyInfo(sType: VK_STRUCTURE_TYPE_DEPENDENCY_INFO, imageMemoryBarrierCount: 1, pImageMemoryBarriers: b.addr)
+    vkCmdPipelineBarrier2(stream.cmdBuffer, dep.addr)
+    target.currentLayout = VK_IMAGE_LAYOUT_GENERAL
 
-  # 3. Push Descriptors (Target storage image at binding 0)
   var imgDescInfo = VkDescriptorImageInfo(
     imageView: target.storageView,
     imageLayout: VK_IMAGE_LAYOUT_GENERAL,
   )
   var writeDesc = VkWriteDescriptorSet(
     sType: VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-    dstBinding: 0,
+    dstBinding: binding,
     descriptorCount: 1,
     descriptorType: VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
     pImageInfo: imgDescInfo.addr,
   )
   vkCmdPushDescriptorSet(stream.cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, stream.device.computeLayout, 0, 1, writeDesc.addr)
 
-  # 4. Push Constants
+proc clearTarget*(stream: GpuStream, target: GpuTarget, r: float32 = 0.0f32, g: float32 = 0.0f32, b: float32 = 0.0f32, a: float32 = 1.0f32) =
+  ## Clears target.storageImage with a solid color using vkCmdClearColorImage.
+  var srcStage = VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_NONE)
+  var srcAccess = VkAccessFlags2(VK_ACCESS_2_NONE)
+  if target.currentLayout == VK_IMAGE_LAYOUT_GENERAL:
+    srcStage = VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+    srcAccess = VkAccessFlags2(VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
+  elif target.currentLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL or target.currentLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+    srcStage = VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_TRANSFER_BIT)
+    srcAccess = VkAccessFlags2(VK_ACCESS_2_TRANSFER_WRITE_BIT or VK_ACCESS_2_TRANSFER_READ_BIT)
+
+  var toDst = VkImageMemoryBarrier2(
+    sType: VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+    srcStageMask: srcStage,
+    srcAccessMask: srcAccess,
+    dstStageMask: VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_TRANSFER_BIT),
+    dstAccessMask: VkAccessFlags2(VK_ACCESS_2_TRANSFER_WRITE_BIT),
+    oldLayout: target.currentLayout,
+    newLayout: VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    image: target.storageImage,
+    subresourceRange: VkImageSubresourceRange(
+      aspectMask: VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),
+      baseMipLevel: 0, levelCount: 1, baseArrayLayer: 0, layerCount: 1,
+    ),
+  )
+  var depDst = VkDependencyInfo(sType: VK_STRUCTURE_TYPE_DEPENDENCY_INFO, imageMemoryBarrierCount: 1, pImageMemoryBarriers: toDst.addr)
+  vkCmdPipelineBarrier2(stream.cmdBuffer, depDst.addr)
+
+  var clearColor = VkClearColorValue(float32: [r, g, b, a])
+  var range = VkImageSubresourceRange(
+    aspectMask: VkImageAspectFlags(VK_IMAGE_ASPECT_COLOR_BIT),
+    baseMipLevel: 0, levelCount: 1, baseArrayLayer: 0, layerCount: 1,
+  )
+  vkCmdClearColorImage(stream.cmdBuffer, target.storageImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clearColor.addr, 1, range.addr)
+  target.currentLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+
+proc barrierComputeToCompute*(stream: GpuStream) =
+  ## Inserts a pipeline memory barrier ensuring all previous compute shader writes
+  ## (SSBO / BDA memory and images) are visible to subsequent compute reads/writes.
+  var memBarrier = VkMemoryBarrier2(
+    sType: VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+    srcStageMask: VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT),
+    srcAccessMask: VkAccessFlags2(VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT or VK_ACCESS_2_SHADER_WRITE_BIT),
+    dstStageMask: VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT),
+    dstAccessMask: VkAccessFlags2(VK_ACCESS_2_SHADER_STORAGE_READ_BIT or VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT or VK_ACCESS_2_SHADER_READ_BIT),
+  )
+  var dep = VkDependencyInfo(
+    sType: VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+    memoryBarrierCount: 1,
+    pMemoryBarriers: memBarrier.addr,
+  )
+  vkCmdPipelineBarrier2(stream.cmdBuffer, dep.addr)
+
+proc barrier*(stream: GpuStream) =
+  ## Alias for barrierComputeToCompute.
+  stream.barrierComputeToCompute()
+
+proc dispatch*[PushT: object](
+  stream: GpuStream,
+  shader: ComputeShader,
+  pushConstants: PushT,
+  workgroupsX: uint32,
+  workgroupsY: uint32 = 1,
+  workgroupsZ: uint32 = 1,
+) =
+  ## Dispatches a compute shader with push constants (pure BDA or previously bound descriptors).
+  var stage = VK_SHADER_STAGE_COMPUTE_BIT
+  vkCmdBindShadersEXT(stream.cmdBuffer, 1, stage.addr, shader.handle.addr)
+
   var pushCopy = pushConstants
   vkCmdPushConstants(
     stream.cmdBuffer,
@@ -612,19 +685,43 @@ proc dispatch*[PushT: object](
     pushCopy.addr,
   )
 
-  # 5. Dispatch
   vkCmdDispatch(stream.cmdBuffer, workgroupsX, workgroupsY, workgroupsZ)
 
+proc dispatch*[PushT: object](
+  stream: GpuStream,
+  shader: ComputeShader,
+  target: GpuTarget,
+  pushConstants: PushT,
+  workgroupsX: uint32,
+  workgroupsY: uint32 = 1,
+  workgroupsZ: uint32 = 1,
+) =
+  ## Convenience dispatch that automatically binds target to descriptor binding 0 and dispatches.
+  stream.bindTarget(target, 0)
+  stream.dispatch(shader, pushConstants, workgroupsX, workgroupsY, workgroupsZ)
+
 proc present*(stream: GpuStream, target: GpuTarget): bool {.discardable.} =
+  var srcStage = VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_NONE)
+  var srcAccess = VkAccessFlags2(VK_ACCESS_2_NONE)
+  if target.currentLayout == VK_IMAGE_LAYOUT_GENERAL:
+    srcStage = VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+    srcAccess = VkAccessFlags2(VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
+  elif target.currentLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+    srcStage = VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_TRANSFER_BIT)
+    srcAccess = VkAccessFlags2(VK_ACCESS_2_TRANSFER_WRITE_BIT)
+  elif target.currentLayout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+    srcStage = VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_TRANSFER_BIT)
+    srcAccess = VkAccessFlags2(VK_ACCESS_2_TRANSFER_READ_BIT)
+
   # 1. Barrier: Transition storage image to TRANSFER_SRC and swapchain image to TRANSFER_DST
   var barriers = [
     VkImageMemoryBarrier2(
       sType: VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-      srcStageMask: VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT),
-      srcAccessMask: VkAccessFlags2(VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT),
+      srcStageMask: srcStage,
+      srcAccessMask: srcAccess,
       dstStageMask: VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_TRANSFER_BIT),
       dstAccessMask: VkAccessFlags2(VK_ACCESS_2_TRANSFER_READ_BIT),
-      oldLayout: VK_IMAGE_LAYOUT_GENERAL,
+      oldLayout: target.currentLayout,
       newLayout: VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
       image: target.storageImage,
       subresourceRange: VkImageSubresourceRange(
@@ -649,6 +746,7 @@ proc present*(stream: GpuStream, target: GpuTarget): bool {.discardable.} =
   ]
   var dep2 = VkDependencyInfo(sType: VK_STRUCTURE_TYPE_DEPENDENCY_INFO, imageMemoryBarrierCount: 2, pImageMemoryBarriers: barriers[0].addr)
   vkCmdPipelineBarrier2(stream.cmdBuffer, dep2.addr)
+  target.currentLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
 
   # 2. vkCmdCopyImage2 (Direct VRAM copy between matching image formats)
   var copyRegion = VkImageCopy2(
@@ -769,7 +867,7 @@ proc readbackTargetPPM*(stream: GpuStream, target: GpuTarget, outputPath: string
   var allocInfo = VkMemoryAllocateInfo(
     sType: VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
     allocationSize: memReqs.size,
-    memoryTypeIndex: findMemoryType(stream.device.physicalDevice, memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+    memoryTypeIndex: findMemoryType(stream.device.physicalDevice, memReqs.memoryTypeBits, (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT.uint32 or VK_MEMORY_PROPERTY_HOST_COHERENT_BIT.uint32)),
   )
   var readbackMem: VkDeviceMemory
   checkVkErr(vkAllocateMemory(stream.device.device, allocInfo.addr, nil, readbackMem.addr), "AllocateReadbackMem")
@@ -786,7 +884,7 @@ proc readbackTargetPPM*(stream: GpuStream, target: GpuTarget, outputPath: string
     srcAccessMask: VkAccessFlags2(VK_ACCESS_2_MEMORY_WRITE_BIT),
     dstStageMask: VkPipelineStageFlags2(VK_PIPELINE_STAGE_2_TRANSFER_BIT),
     dstAccessMask: VkAccessFlags2(VK_ACCESS_2_TRANSFER_READ_BIT),
-    oldLayout: VK_IMAGE_LAYOUT_GENERAL,
+    oldLayout: target.currentLayout,
     newLayout: VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
     image: target.storageImage,
     subresourceRange: VkImageSubresourceRange(
