@@ -1,7 +1,7 @@
 import SlangIntegration
 
-const artifacts = compileSlangShader("shaders/Test2D.slang")
-generateNimObjects(parseShaderReflection(artifacts), ["TestParams", "PushConstants"])
+const shaderData = compileSlangShader("shaders/Test2D.slang")
+generateNimObjects(parseShaderReflection(shaderData), ["TestParams", "PushConstants"])
 
 var p: TestParams
 p.colorA = [1.0f32, 0.0f32, 0.0f32, 1.0f32]
@@ -16,5 +16,5 @@ push.params = 12345678'u64
 
 echo "TestParams size: ", sizeof(TestParams)
 echo "PushConstants size: ", sizeof(PushConstants)
-echo "Workgroup size: ", artifacts.metadata
-echo "Shader binary path: ", artifacts.spvPath
+echo "Workgroup size: ", (shaderData.workgroupX, shaderData.workgroupY, shaderData.workgroupZ)
+echo "Shader binary path: ", shaderData.spvPath

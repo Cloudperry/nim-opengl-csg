@@ -1,8 +1,8 @@
 ## Vulkan 1.4 Multi-Pass Compute Particle Simulation
 ## Features:
 ## - 200,000 GPU-simulated particles with Buffer Device Address (BDA)
-## - Pass 1: ClearTarget via vkCmdClearColorImage
-## - Pass 2: Decoupled pure compute simulation (harmonic flow field + smooth palette fading)
+## - Pass 1: ClearTarget via vkCmdClearColorImage to dusk midnight blue
+## - Pass 2: Decoupled pure compute simulation (harmonic flow field + sunset orange-to-blue gradient)
 ## - Pipeline memory barrier between simulation write and render read
 ## - Pass 3: Compute rasterization into GpuTarget storage image
 ## - Swapchain presentation & dynamic window resizing
@@ -14,11 +14,11 @@ import GpuStream
 import SlangIntegration
 
 # Explicit compile-time Slang shader compilation & reflection type generation
-const simArtifacts = compileSlangShader("shaders/ParticleSim.slang")
-generateNimObjects(parseShaderReflection(simArtifacts), ["Particle", "SimPushConstants"])
+const simData = compileSlangShader("shaders/ParticleSim.slang")
+generateNimObjects(parseShaderReflection(simData), ["Particle", "SimPushConstants"])
 
-const renderArtifacts = compileSlangShader("shaders/ParticleRender.slang")
-generateNimObjects(parseShaderReflection(renderArtifacts), ["RenderPushConstants"])
+const renderData = compileSlangShader("shaders/ParticleRender.slang")
+generateNimObjects(parseShaderReflection(renderData), ["RenderPushConstants"])
 
 const NumParticles = 200_000
 
@@ -36,7 +36,7 @@ proc initParticles(slice: var GpuSlice[Particle], count: int, aspect: float32) =
     slice[i] = Particle(
       position: [px, py],
       velocity: [0.0f32, 0.0f32],
-      color: [0.2f32, 0.8f32, 0.9f32, 0.9f32],
+      color: [1.0f32, 0.55f32, 0.18f32, 0.95f32],
       life: rand(10.0f32),
       size: sizeVal,
       speed: speedVal,
@@ -67,8 +67,8 @@ proc main() =
   var target = createTarget(device, win, winWidth, winHeight)
 
   # 3. Load SPIR-V Compute Shader Objects (bytecode embedded at compile-time)
-  var simShader = loadComputeShader(device, simArtifacts.bytecode, "main")
-  var renderShader = loadComputeShader(device, renderArtifacts.bytecode, "main")
+  var simShader = loadComputeShader(device, simData.bytecode, "main")
+  var renderShader = loadComputeShader(device, renderData.bytecode, "main")
 
   # 4. Initialize Command Stream
   var stream = initGpuStream(device)
@@ -78,8 +78,8 @@ proc main() =
   initParticles(particlesSlice, NumParticles, winWidth.float32 / winHeight.float32)
 
   echo fmt"Initialized {NumParticles} particles in host-mapped VRAM ({sizeof(Particle) * NumParticles div 1024} KB)"
-  echo fmt"Simulation workgroup size: {simArtifacts.metadata.workgroupX}x{simArtifacts.metadata.workgroupY}x{simArtifacts.metadata.workgroupZ}"
-  echo fmt"Rendering workgroup size: {renderArtifacts.metadata.workgroupX}x{renderArtifacts.metadata.workgroupY}x{renderArtifacts.metadata.workgroupZ}"
+  echo fmt"Simulation workgroup size: {simData.workgroupX}x{simData.workgroupY}x{simData.workgroupZ}"
+  echo fmt"Rendering workgroup size: {renderData.workgroupX}x{renderData.workgroupY}x{renderData.workgroupZ}"
 
   var running = true
   var frameCount = 0
@@ -129,8 +129,8 @@ proc main() =
 
     let aspect = target.width.float32 / target.height.float32
 
-    # --- Pass 1: Clear Target Image to Deep Dark Backdrop ---
-    stream.clearTarget(target, 0.015f32, 0.015f32, 0.030f32, 1.0f32)
+    # --- Pass 1: Clear Target Image to Dusk Midnight Blue Backdrop ---
+    stream.clearTarget(target, 0.015f32, 0.018f32, 0.040f32, 1.0f32)
 
     # --- Pass 2: Particle Simulation (Decoupled Pure Compute Pass) ---
     var simPush = SimPushConstants(
@@ -140,7 +140,7 @@ proc main() =
       time: totalTime,
       aspectRatio: aspect,
     )
-    let simWgX = (NumParticles.uint32 + simArtifacts.metadata.workgroupX - 1) div simArtifacts.metadata.workgroupX
+    let simWgX = (NumParticles.uint32 + simData.workgroupX - 1) div simData.workgroupX
     stream.dispatch(simShader, simPush, simWgX, 1, 1)
 
     # --- Compute-to-Compute Memory Barrier ---
@@ -155,7 +155,7 @@ proc main() =
       screenHeight: target.height.uint32,
       aspectRatio: aspect,
     )
-    let renderWgX = (NumParticles.uint32 + renderArtifacts.metadata.workgroupX - 1) div renderArtifacts.metadata.workgroupX
+    let renderWgX = (NumParticles.uint32 + renderData.workgroupX - 1) div renderData.workgroupX
     stream.dispatch(renderShader, target, renderPush, renderWgX, 1, 1)
 
     # Screenshot capture for headless testing/verification

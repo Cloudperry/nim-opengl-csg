@@ -7,15 +7,12 @@ import Slangc
 export Slangc
 
 type
-  ShaderMetadata* = object
-    workgroupX*, workgroupY*, workgroupZ*: uint32
-
-  ShaderArtifacts* = object
+  ShaderData* = object
     sourcePath*: string
     spvPath*: string
     reflectionPath*: string
     bytecode*: string
-    metadata*: ShaderMetadata
+    workgroupX*, workgroupY*, workgroupZ*: uint32
 
   SlangSize* = object
     kind*: string
@@ -68,9 +65,9 @@ proc parseShaderReflectionFile*(reflectionPath: string): SlangReflection =
   ## Reads and parses a Slang reflection JSON file at compile time or runtime.
   staticRead(reflectionPath).parseShaderReflection()
 
-proc parseShaderReflection*(artifacts: ShaderArtifacts): SlangReflection =
-  ## Parses reflection data directly from a ShaderArtifacts object.
-  parseShaderReflectionFile(artifacts.reflectionPath)
+proc parseShaderReflection*(shaderData: ShaderData): SlangReflection =
+  ## Parses reflection data directly from a ShaderData object.
+  parseShaderReflectionFile(shaderData.reflectionPath)
 
 proc findStructType*(refl: SlangReflection, structName: string): SlangType =
   ## Recursively finds a struct definition by name within reflection parameters.
@@ -145,9 +142,9 @@ proc compileSlangShader*(
     stage: ShaderStage = Compute,
     target: TargetFormat = SpirV,
     profile: string = "",
-): ShaderArtifacts =
+): ShaderData =
   ## Compiles a Slang shader via Slangc, parses its basic metadata,
-  ## and returns a ShaderArtifacts object containing paths, bytecode, and workgroup size.
+  ## and returns a ShaderData object containing paths, bytecode, and workgroup sizes.
   let resolvedSlang = resolveShaderPath(slangPath)
   if not fileExists(resolvedSlang):
     raise newException(IOError, "Could not find Slang shader file: '" & slangPath & "' (searched project and repo root)")
@@ -179,20 +176,24 @@ proc compileSlangShader*(
   let jsonStr = staticRead(reflPath)
   let refl = jsonStr.fromJson(SlangReflection)
 
-  var meta = ShaderMetadata(workgroupX: 1, workgroupY: 1, workgroupZ: 1)
+  var wgX = 1'u32
+  var wgY = 1'u32
+  var wgZ = 1'u32
   if refl.entryPoints.len > 0:
     let ep = refl.entryPoints[0]
     let tg = ep.threadGroupSize
-    meta.workgroupX = (if tg.len > 0: tg[0] else: 1).uint32
-    meta.workgroupY = (if tg.len > 1: tg[1] else: 1).uint32
-    meta.workgroupZ = (if tg.len > 2: tg[2] else: 1).uint32
+    wgX = (if tg.len > 0: tg[0] else: 1).uint32
+    wgY = (if tg.len > 1: tg[1] else: 1).uint32
+    wgZ = (if tg.len > 2: tg[2] else: 1).uint32
 
-  result = ShaderArtifacts(
+  result = ShaderData(
     sourcePath: resolvedSlang,
     spvPath: opts.outFile,
     reflectionPath: reflPath,
     bytecode: staticRead(opts.outFile),
-    metadata: meta,
+    workgroupX: wgX,
+    workgroupY: wgY,
+    workgroupZ: wgZ,
   )
 
 proc buildTypeAst*(st: SlangType): NimNode =
