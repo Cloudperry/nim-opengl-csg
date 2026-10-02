@@ -13,9 +13,12 @@ import vk14
 import GpuStream
 import SlangIntegration
 
-# Compile-time Slang shader compilation & reflection type generation
-importAndCompileShader("shaders/ParticleSim.slang", ["Particle", "SimPushConstants"])
-importAndCompileShader("shaders/ParticleRender.slang", ["RenderPushConstants"])
+# Explicit compile-time Slang shader compilation & reflection type generation
+const simArtifacts = compileSlangShader("shaders/ParticleSim.slang")
+generateNimObjects(parseShaderReflection(simArtifacts), ["Particle", "SimPushConstants"])
+
+const renderArtifacts = compileSlangShader("shaders/ParticleRender.slang")
+generateNimObjects(parseShaderReflection(renderArtifacts), ["RenderPushConstants"])
 
 const NumParticles = 200_000
 
@@ -64,8 +67,8 @@ proc main() =
   var target = createTarget(device, win, winWidth, winHeight)
 
   # 3. Load SPIR-V Compute Shader Objects (bytecode embedded at compile-time)
-  var simShader = loadComputeShader(device, getShaderCode_ParticleSim(), "main")
-  var renderShader = loadComputeShader(device, getShaderCode_ParticleRender(), "main")
+  var simShader = loadComputeShader(device, simArtifacts.bytecode, "main")
+  var renderShader = loadComputeShader(device, renderArtifacts.bytecode, "main")
 
   # 4. Initialize Command Stream
   var stream = initGpuStream(device)
@@ -74,11 +77,9 @@ proc main() =
   var particlesSlice = allocSlice[Particle](device, NumParticles)
   initParticles(particlesSlice, NumParticles, winWidth.float32 / winHeight.float32)
 
-  let simMeta = getShaderMeta_ParticleSim()
-  let renderMeta = getShaderMeta_ParticleRender()
   echo fmt"Initialized {NumParticles} particles in host-mapped VRAM ({sizeof(Particle) * NumParticles div 1024} KB)"
-  echo fmt"Simulation workgroup size: {simMeta.workgroupX}x{simMeta.workgroupY}x{simMeta.workgroupZ}"
-  echo fmt"Rendering workgroup size: {renderMeta.workgroupX}x{renderMeta.workgroupY}x{renderMeta.workgroupZ}"
+  echo fmt"Simulation workgroup size: {simArtifacts.metadata.workgroupX}x{simArtifacts.metadata.workgroupY}x{simArtifacts.metadata.workgroupZ}"
+  echo fmt"Rendering workgroup size: {renderArtifacts.metadata.workgroupX}x{renderArtifacts.metadata.workgroupY}x{renderArtifacts.metadata.workgroupZ}"
 
   var running = true
   var frameCount = 0
@@ -139,7 +140,7 @@ proc main() =
       time: totalTime,
       aspectRatio: aspect,
     )
-    let simWgX = (NumParticles.uint32 + simMeta.workgroupX - 1) div simMeta.workgroupX
+    let simWgX = (NumParticles.uint32 + simArtifacts.metadata.workgroupX - 1) div simArtifacts.metadata.workgroupX
     stream.dispatch(simShader, simPush, simWgX, 1, 1)
 
     # --- Compute-to-Compute Memory Barrier ---
@@ -154,7 +155,7 @@ proc main() =
       screenHeight: target.height.uint32,
       aspectRatio: aspect,
     )
-    let renderWgX = (NumParticles.uint32 + renderMeta.workgroupX - 1) div renderMeta.workgroupX
+    let renderWgX = (NumParticles.uint32 + renderArtifacts.metadata.workgroupX - 1) div renderArtifacts.metadata.workgroupX
     stream.dispatch(renderShader, target, renderPush, renderWgX, 1, 1)
 
     # Screenshot capture for headless testing/verification

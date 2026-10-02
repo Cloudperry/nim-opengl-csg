@@ -19,7 +19,7 @@ This checklist tracks the implementation of the Vulkan 1.4 compute stream port o
 - [x] Implement robust surface lifecycle, leak-free device probing, and window resize handling (`target.resize(w, h)`).
 - [x] Decouple `stream.dispatch` from `GpuTarget` for general compute (pure BDA dispatches, multi-pass pipelines).
 - [x] Implement `bindTarget`, `clearTarget`, and `barrierComputeToCompute` / `barrier` for multi-pass compute pipelines.
-- [x] Implement multi-pass compute particle simulation example app (`tests/test_checkpoint1.nim`) with 200,000 GPU-simulated particles, organic harmonic flow field, smooth cosine color palette fading, and compute rasterization.
+- [x] Implement multi-pass compute particle simulation example app (`tests/TestCheckpoint1.nim`) with 200,000 GPU-simulated particles, organic harmonic flow field, smooth cosine color palette fading, and compute rasterization.
 - [ ] Add layout validation tag/flag to shader output compiled through the Nim Slang API (validate at load time so layouts cannot silently mismatch).
 
 ### [ ] Checkpoint 2: Full SDF Slang Shader BDA Migration & Reflection Test

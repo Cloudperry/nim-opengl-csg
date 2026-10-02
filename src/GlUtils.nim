@@ -1,6 +1,6 @@
 import std/[tables, strformat, strutils, options, sequtils, bitops, sugar, macros, math]
 import pkg/glm
-import ./glad/gl
+import ./glad/Gl
 import Logger
 
 # ======================================== Shader class and compilation error handling ========================================

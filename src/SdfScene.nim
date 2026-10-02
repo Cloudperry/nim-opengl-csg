@@ -1,6 +1,6 @@
 import std/[strformat, options, lenientops]
 import pkg/[glm]
-import ./glad/gl
+import ./glad/Gl
 import GlUtils
 
 type

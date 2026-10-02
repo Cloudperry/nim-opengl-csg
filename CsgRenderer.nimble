@@ -7,7 +7,7 @@ binDir = "bin"
 namedBin["SdfRenderer"] = "sdf-renderer"
 namedBin["SdfRendererFragment"] = "sdf-renderer-fragment"
 namedBin["BasicVulkan"] = "basic-vulkan"
-namedBin["../tests/test_checkpoint1"] = "test-checkpoint1"
+namedBin["../tests/TestCheckpoint1"] = "test-checkpoint1"
 backend = "c"
 license = "MIT"
 

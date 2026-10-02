@@ -38,7 +38,7 @@ evaluation runs only at primary-ray hits, not during distance marching or shadow
 The default room uses warm limestone-colored walls and earthy sandstone surfaces
 with a leafy green moving sphere.
 Run the material bytecode regression tests with
-`nimble c -r --path:src tests/testSdfMaterials.nim`.
+`nimble c -r --path:src tests/TestSdfMaterials.nim`.
 
 # Reproducing tests in the thesis
 - Instructions to reproduce the tests in Fig. 4.3 can be found [here](https://github.com/Cloudperry/nim-opengl-csg/tree/sphere-tracing-inconsistent-perf)

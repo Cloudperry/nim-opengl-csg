@@ -2,7 +2,7 @@ import std/[os, strformat, options, math, monotimes, sequtils, importutils, suga
 import std/times except `getTime`
 import pkg/[glm, confutils]
 import sdl3
-import ./glad/gl
+import ./glad/Gl
 import GlUtils, Slangc, Scene, Logger, Shapes, SdfScene
 
 proc glGetProc(name: cstring): pointer {.cdecl.} =

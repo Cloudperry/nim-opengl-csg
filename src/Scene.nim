@@ -1,5 +1,5 @@
 import std/[strformat, options]
-import ./glad/gl
+import ./glad/Gl
 import pkg/glm
 import GlUtils
 

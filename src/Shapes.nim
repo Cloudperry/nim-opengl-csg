@@ -1,5 +1,5 @@
 import std/lenientops
-import glad/gl
+import glad/Gl
 import pkg/glm
 import Scene, GlUtils
 
