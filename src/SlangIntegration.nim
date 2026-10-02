@@ -3,6 +3,8 @@
 
 import std/[macros, os, strutils]
 import jsony
+import vmath
+export vmath
 import Slangc
 export Slangc
 
@@ -26,13 +28,18 @@ type
     index*: int
     elementStride*: int
 
+  SlangValueType* = ref object
+    strVal*: string
+    typeVal*: SlangType
+
   SlangType* = ref object
     kind*: string
     name*: string
     scalarType*: string
     elementCount*: int
     elementType*: SlangType
-    valueType*: SlangType
+    valueType*: SlangValueType
+    resultType*: SlangType
     fields*: seq[SlangField]
     sizes*: seq[SlangSize]
 
@@ -57,13 +64,30 @@ type
     parameters*: seq[SlangParameter]
     entryPoints*: seq[SlangEntryPoint]
 
+proc parseHook*(s: string, i: var int, v: var SlangValueType) =
+  eatSpace(s, i)
+  if i < s.len and s[i] == '"':
+    var str: string
+    parseHook(s, i, str)
+    v = SlangValueType(strVal: str)
+  elif i < s.len and s[i] == '{':
+    var st: SlangType
+    parseHook(s, i, st)
+    v = SlangValueType(typeVal: st)
+  elif i + 3 < s.len and s[i..i+3] == "null":
+    i += 4
+    v = nil
+
 proc parseShaderReflection*(jsonStr: string): SlangReflection =
   ## Parses a Slang reflection JSON string into a SlangReflection object.
   result = jsonStr.fromJson(SlangReflection)
 
 proc parseShaderReflectionFile*(reflectionPath: string): SlangReflection =
   ## Reads and parses a Slang reflection JSON file at compile time or runtime.
-  staticRead(reflectionPath).parseShaderReflection()
+  when nimvm:
+    staticRead(reflectionPath).parseShaderReflection()
+  else:
+    readFile(reflectionPath).parseShaderReflection()
 
 proc parseShaderReflection*(shaderData: ShaderData): SlangReflection =
   ## Parses reflection data directly from a ShaderData object.
@@ -78,8 +102,11 @@ proc findStructType*(refl: SlangReflection, structName: string): SlangType =
     if t.elementType != nil:
       let found = search(t.elementType)
       if found != nil: return found
-    if t.valueType != nil:
-      let found = search(t.valueType)
+    if t.valueType != nil and t.valueType.typeVal != nil:
+      let found = search(t.valueType.typeVal)
+      if found != nil: return found
+    if t.resultType != nil:
+      let found = search(t.resultType)
       if found != nil: return found
     for f in t.fields:
       let found = search(f.`type`)
@@ -107,8 +134,69 @@ proc toNimTypeIdent*(t: SlangType): NimNode =
     of "bool": ident("bool")
     else: ident("uint32")
   of "vector":
-    let elem = toNimTypeIdent(t.elementType)
-    nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), elem)
+    if t.elementType != nil and t.elementType.kind == "scalar":
+      case t.elementType.scalarType
+      of "float32":
+        case t.elementCount
+        of 2: ident("Vec2")
+        of 3: ident("Vec3")
+        of 4: ident("Vec4")
+        else: nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("float32"))
+      of "float64":
+        case t.elementCount
+        of 2: ident("DVec2")
+        of 3: ident("DVec3")
+        of 4: ident("DVec4")
+        else: nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("float64"))
+      of "int32":
+        case t.elementCount
+        of 2: ident("IVec2")
+        of 3: ident("IVec3")
+        of 4: ident("IVec4")
+        else: nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("int32"))
+      of "uint32":
+        case t.elementCount
+        of 2: ident("UVec2")
+        of 3: ident("UVec3")
+        of 4: ident("UVec4")
+        else: nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("uint32"))
+      of "bool":
+        case t.elementCount
+        of 2: ident("BVec2")
+        of 3: ident("BVec3")
+        of 4: ident("BVec4")
+        else: nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("bool"))
+      else:
+        let elem = toNimTypeIdent(t.elementType)
+        nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), elem)
+    else:
+      let elem = toNimTypeIdent(t.elementType)
+      nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), elem)
+  of "matrix":
+    let rows = t.elementCount
+    var cols = 0
+    var scalar = "float32"
+    if t.elementType != nil:
+      cols = t.elementType.elementCount
+      if t.elementType.elementType != nil and t.elementType.elementType.kind == "scalar":
+        scalar = t.elementType.elementType.scalarType
+      elif t.elementType.kind == "scalar":
+        scalar = t.elementType.scalarType
+
+    case scalar
+    of "float32":
+      if rows == 2 and cols == 2: ident("Mat2")
+      elif rows == 3 and cols == 3: ident("Mat3")
+      elif rows == 4 and cols == 4: ident("Mat4")
+      else: nnkBracketExpr.newTree(ident("array"), newLit(rows * cols), ident("float32"))
+    of "float64":
+      if rows == 2 and cols == 2: ident("DMat2")
+      elif rows == 3 and cols == 3: ident("DMat3")
+      elif rows == 4 and cols == 4: ident("DMat4")
+      else: nnkBracketExpr.newTree(ident("array"), newLit(rows * cols), ident("float64"))
+    else:
+      let elem = toNimTypeIdent(t.elementType)
+      nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), elem)
   of "array":
     let elem = toNimTypeIdent(t.elementType)
     nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), elem)
@@ -149,8 +237,22 @@ proc compileSlangShader*(
   if not fileExists(resolvedSlang):
     raise newException(IOError, "Could not find Slang shader file: '" & slangPath & "' (searched project and repo root)")
 
-  # Invalidate Nim compile cache if shader source changes
-  discard staticRead(resolvedSlang)
+  # Invalidate Nim compile cache if shader source or its imports change
+  let shaderSrc = staticRead(resolvedSlang)
+  let shaderDir = parentDir(resolvedSlang)
+  for line in shaderSrc.splitLines():
+    let stripped = line.strip()
+    if stripped.startsWith("import ") and stripped.endsWith(";"):
+      let modName = stripped[7 ..< stripped.len - 1].strip()
+      let modPath = shaderDir / (modName & ".slang")
+      if fileExists(modPath):
+        discard staticRead(modPath)
+    elif stripped.startsWith("#include"):
+      let parts = stripped.split({'"', '<', '>'})
+      if parts.len >= 2:
+        let incPath = shaderDir / parts[1].strip()
+        if fileExists(incPath):
+          discard staticRead(incPath)
 
   let baseName = if resolvedSlang.endsWith(".slang"): resolvedSlang[0 .. ^7] else: resolvedSlang
   let reflPath = baseName & ".reflection.json"
@@ -208,8 +310,15 @@ proc buildTypeAst*(st: SlangType): NimNode =
 
 proc buildSizeAssertAst*(st: SlangType): NimNode =
   ## Builds a static compile-time size assertion AST for a Slang struct.
-  if st.sizes.len > 0 and st.sizes[0].value > 0:
-    let expSize = st.sizes[0].value
+  var expSize = 0
+  for s in st.sizes:
+    if s.kind == "uniform" and s.value > 0:
+      expSize = s.value
+      break
+  if expSize == 0 and st.sizes.len > 0 and st.sizes[0].value > 0:
+    expSize = st.sizes[0].value
+
+  if expSize > 0:
     let reqIdent = ident(st.name)
     let reqName = st.name
     result = quote do:

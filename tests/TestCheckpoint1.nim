@@ -83,9 +83,9 @@ proc initParticles(slice: var GpuSlice[Particle], count: int, aspect: float32) =
     let sizeVal = 1.0f32 + rand(1.2f32)
 
     slice[i] = Particle(
-      position: [px, py],
-      velocity: [0.0f32, 0.0f32],
-      color: [1.0f32, 0.55f32, 0.18f32, 0.95f32],
+      position: vec2(px, py),
+      velocity: vec2(0.0f32, 0.0f32),
+      color: vec4(1.0f32, 0.55f32, 0.18f32, 0.95f32),
       life: rand(10.0f32),
       size: sizeVal,
       speed: speedVal,
