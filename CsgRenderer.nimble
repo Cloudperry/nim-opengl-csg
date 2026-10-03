@@ -10,6 +10,7 @@ namedBin["SdfRendererFragment"] = "sdf-renderer-fragment"
 namedBin["BasicVulkan"] = "basic-vulkan"
 namedBin["../tests/TestCheckpoint1"] = "test-checkpoint1"
 namedBin["../tests/TestCheckpoint2"] = "test-checkpoint2"
+namedBin["../tests/TestCheckpoint4"] = "test-checkpoint4"
 backend = "c"
 license = "MIT"
 
