@@ -1,7 +1,7 @@
 ## Slang Reflection Parser & Nim Type Generator
 ## Provides explicit shader compilation, reflection parsing, and minimal type generation.
 
-import std/[macros, os, strutils]
+import std/[macros, os, strutils, strformat]
 import jsony
 import vmath
 export vmath
@@ -122,56 +122,43 @@ proc toNimTypeIdent*(t: SlangType): NimNode =
   ## Maps a SlangType to its corresponding Nim AST type node.
   case t.kind
   of "scalar":
-    case t.scalarType
-    of "float32": ident("float32")
-    of "float64": ident("float64")
-    of "uint32": ident("uint32")
-    of "int32": ident("int32")
-    of "uint64": ident("uint64")
-    of "int64": ident("int64")
-    of "uint8": ident("uint8")
-    of "int8": ident("int8")
-    of "bool": ident("bool")
-    else: ident("uint32")
+    if t.scalarType in [
+      "float32", "float64", "uint32", "int32", "uint64", "int64", "uint8", "int8", "bool"
+    ]:
+      ident(t.scalarType)
+    else:
+      ident("uint32")
+
   of "vector":
     if t.elementType != nil and t.elementType.kind == "scalar":
       case t.elementType.scalarType
       of "float32":
-        case t.elementCount
-        of 2: ident("Vec2")
-        of 3: ident("Vec3")
-        of 4: ident("Vec4")
-        else: nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("float32"))
+        if t.elementCount in 2 .. 4: ident(fmt"Vec{t.elementCount}")
+        else:
+          nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("float32"))
       of "float64":
-        case t.elementCount
-        of 2: ident("DVec2")
-        of 3: ident("DVec3")
-        of 4: ident("DVec4")
-        else: nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("float64"))
+        if t.elementCount in 2 .. 4: ident(fmt"DVec{t.elementCount}")
+        else:
+          nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("float64"))
       of "int32":
-        case t.elementCount
-        of 2: ident("IVec2")
-        of 3: ident("IVec3")
-        of 4: ident("IVec4")
-        else: nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("int32"))
+        if t.elementCount in 2 .. 4: ident(fmt"IVec{t.elementCount}")
+        else:
+          nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("int32"))
       of "uint32":
-        case t.elementCount
-        of 2: ident("UVec2")
-        of 3: ident("UVec3")
-        of 4: ident("UVec4")
-        else: nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("uint32"))
+        if t.elementCount in 2 .. 4: ident(fmt"UVec{t.elementCount}")
+        else:
+          nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("uint32"))
       of "bool":
-        case t.elementCount
-        of 2: ident("BVec2")
-        of 3: ident("BVec3")
-        of 4: ident("BVec4")
-        else: nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("bool"))
+        if t.elementCount in 2 .. 4: ident(fmt"BVec{t.elementCount}")
+        else:
+          nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), ident("bool"))
       else:
         let elem = toNimTypeIdent(t.elementType)
         nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), elem)
     else:
       let elem = toNimTypeIdent(t.elementType)
       nnkBracketExpr.newTree(ident("array"), newLit(t.elementCount), elem)
+
   of "matrix":
     let rows = t.elementCount
     var cols = 0
@@ -182,17 +169,12 @@ proc toNimTypeIdent*(t: SlangType): NimNode =
         scalar = t.elementType.elementType.scalarType
       elif t.elementType.kind == "scalar":
         scalar = t.elementType.scalarType
-
     case scalar
     of "float32":
-      if rows == 2 and cols == 2: ident("Mat2")
-      elif rows == 3 and cols == 3: ident("Mat3")
-      elif rows == 4 and cols == 4: ident("Mat4")
+      if rows == cols and rows in 2 .. 4 and cols in 2 .. 4: ident(fmt"Mat{rows}")
       else: nnkBracketExpr.newTree(ident("array"), newLit(rows * cols), ident("float32"))
     of "float64":
-      if rows == 2 and cols == 2: ident("DMat2")
-      elif rows == 3 and cols == 3: ident("DMat3")
-      elif rows == 4 and cols == 4: ident("DMat4")
+      if rows == cols and rows in 2 .. 4 and cols in 2 .. 4: ident(fmt"DMat{rows}")
       else: nnkBracketExpr.newTree(ident("array"), newLit(rows * cols), ident("float64"))
     else:
       let elem = toNimTypeIdent(t.elementType)
