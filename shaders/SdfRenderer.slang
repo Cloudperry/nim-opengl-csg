@@ -110,45 +110,26 @@ struct DebugSettings {
   RenderMode mode;
 }
 
-[[vk::binding(0)]]
-ConstantBuffer<SceneUniforms> scene;
-[[vk::binding(1)]]
-ConstantBuffer<DebugSettings> debugOpt;
+struct SdfPushParams {
+  SceneUniforms*   scene;
+  DebugSettings*   debugOpt;
+  SdfProgramData*  progData;
+  SdfInstruction*  prog;
+  PointLight*      pointLights;
+  uint*            progArgs;
+  uint             lightCount;
+  uint             instructionCount;
+}
 
-[[vk::binding(0)]]
-StructuredBuffer<SdfProgramData> sdfProgData;
-[[vk::binding(1)]]
-StructuredBuffer<SdfInstruction> sdfProg;
-[[vk::binding(2)]]
-StructuredBuffer<PointLight> pointLights;
-// SDF program inputs moved into their own dynamically sized SSBO, because having them as a dynamic array inside sdfProgData is problematic with newer Slang versions and most OpenGL drivers.
-[[vk::binding(4)]]
-StructuredBuffer<uint> sdfProgArgs;
-[[vk::binding(3)]]
+[[vk::push_constant]]
+SdfPushParams push;
+
+[[vk::image_format("rgba8")]]
+[[vk::binding(0, 0)]]
 RWTexture2D<float4> outputImage;
 
-struct VertexInput {
-  [[vk::location(0)]]
-  float2 pos;
-  [[vk::location(1)]]
-  float2 uv;
-}
-
-struct VertexOutput {
-  float4 fragCoord : SV_Position;
-  float2 fragUv;
-}
-
 struct FragmentOutput {
-  float4 color : SV_Target0;
-}
-
-[shader("vertex")]
-VertexOutput vertexMain(VertexInput input) {
-  VertexOutput output;
-  output.fragCoord = float4(input.pos, 0.0, 1.0);
-  output.fragUv = input.uv;
-  return output;
+  float4 color;
 }
 
 // Operations eval
@@ -191,7 +172,7 @@ float evalSmoothAddOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData) {
   float k;
   d1 = READ_FLOAT(runtimeData.outputs, insn.runtimeArgsI());
   d2 = READ_FLOAT(runtimeData.outputs, insn.runtimeArgsI() + 1);
-  k = READ_FLOAT(sdfProgArgs, insn.argsI());
+  k = READ_FLOAT(push.progArgs, insn.argsI());
   return opSmoothUnion(d1, d2, k);
 }
 [ForceInline]
@@ -201,7 +182,7 @@ float evalSmoothSubOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData) {
   float k;
   d1 = READ_FLOAT(runtimeData.outputs, insn.runtimeArgsI());
   d2 = READ_FLOAT(runtimeData.outputs, insn.runtimeArgsI() + 1);
-  k = READ_FLOAT(sdfProgArgs, insn.argsI());
+  k = READ_FLOAT(push.progArgs, insn.argsI());
   return opSmoothSubtraction(d1, d2, k);
 }
 [ForceInline]
@@ -211,7 +192,7 @@ float evalSmoothInterOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData) 
   float k;
   d1 = READ_FLOAT(runtimeData.outputs, insn.runtimeArgsI());
   d2 = READ_FLOAT(runtimeData.outputs, insn.runtimeArgsI() + 1);
-  k = READ_FLOAT(sdfProgArgs, insn.argsI());
+  k = READ_FLOAT(push.progArgs, insn.argsI());
   return opSmoothIntersection(d1, d2, k);
 }
 
@@ -220,16 +201,16 @@ float evalSmoothInterOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData) 
 float evalSphere(SdfInstruction insn, float3 rayP) {
   float3 p;
   float r;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  r = READ_FLOAT(sdfProgArgs, insn.argsI() + 3);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  r = READ_FLOAT(push.progArgs, insn.argsI() + 3);
   return sdSphere(rayP - p, r);
 }
 [ForceInline]
 float evalBox(SdfInstruction insn, float3 rayP) {
   float3 p;
   float3 halfExtent;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  halfExtent = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  halfExtent = READ_FLOAT3(push.progArgs, insn.argsI() + 3);
   return sdBox(rayP - p, halfExtent);
 }
 [ForceInline]
@@ -237,9 +218,9 @@ float evalRoundBox(SdfInstruction insn, float3 rayP) {
   float3 p;
   float3 halfExtent;
   float r;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  halfExtent = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
-  r = READ_FLOAT(sdfProgArgs, insn.argsI() + 6);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  halfExtent = READ_FLOAT3(push.progArgs, insn.argsI() + 3);
+  r = READ_FLOAT(push.progArgs, insn.argsI() + 6);
   return sdRoundBox(rayP - p, halfExtent, r);
 }
 [ForceInline]
@@ -247,9 +228,9 @@ float evalBoxFrame(SdfInstruction insn, float3 rayP) {
   float3 p;
   float3 b;
   float e;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  b = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
-  e = READ_FLOAT(sdfProgArgs, insn.argsI() + 6);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  b = READ_FLOAT3(push.progArgs, insn.argsI() + 3);
+  e = READ_FLOAT(push.progArgs, insn.argsI() + 6);
   return sdBoxFrame(rayP - p, b, e);
 }
 [ForceInline]
@@ -257,9 +238,9 @@ float evalCone(SdfInstruction insn, float3 rayP) {
   float3 p;
   float2 c;
   float h;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  c = READ_FLOAT2(sdfProgArgs, insn.argsI() + 3);
-  h = READ_FLOAT(sdfProgArgs, insn.argsI() + 5);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  c = READ_FLOAT2(push.progArgs, insn.argsI() + 3);
+  h = READ_FLOAT(push.progArgs, insn.argsI() + 5);
   return sdCone(rayP - p, c, h);
 }
 [ForceInline]
@@ -269,27 +250,27 @@ float evalCappedCone(SdfInstruction insn, float3 rayP) {
   float3 b;
   float ra;
   float rb;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  a = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
-  b = READ_FLOAT3(sdfProgArgs, insn.argsI() + 6);
-  ra = READ_FLOAT(sdfProgArgs, insn.argsI() + 9);
-  rb = READ_FLOAT(sdfProgArgs, insn.argsI() + 10);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  a = READ_FLOAT3(push.progArgs, insn.argsI() + 3);
+  b = READ_FLOAT3(push.progArgs, insn.argsI() + 6);
+  ra = READ_FLOAT(push.progArgs, insn.argsI() + 9);
+  rb = READ_FLOAT(push.progArgs, insn.argsI() + 10);
   return sdCappedCone(rayP - p, a, b, ra, rb);
 }
 [ForceInline]
 float evalHexPrism(SdfInstruction insn, float3 rayP) {
   float3 p;
   float2 h;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  h = READ_FLOAT2(sdfProgArgs, insn.argsI() + 3);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  h = READ_FLOAT2(push.progArgs, insn.argsI() + 3);
   return sdHexPrism(rayP - p, h);
 }
 [ForceInline]
 float evalTriPrism(SdfInstruction insn, float3 rayP) {
   float3 p;
   float2 h;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  h = READ_FLOAT2(sdfProgArgs, insn.argsI() + 3);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  h = READ_FLOAT2(push.progArgs, insn.argsI() + 3);
   return sdTriPrism(rayP - p, h);
 }
 [ForceInline]
@@ -298,10 +279,10 @@ float evalCapsule(SdfInstruction insn, float3 rayP) {
   float3 a;
   float3 b;
   float r;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  a = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
-  b = READ_FLOAT3(sdfProgArgs, insn.argsI() + 6);
-  r = READ_FLOAT(sdfProgArgs, insn.argsI() + 9);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  a = READ_FLOAT3(push.progArgs, insn.argsI() + 3);
+  b = READ_FLOAT3(push.progArgs, insn.argsI() + 6);
+  r = READ_FLOAT(push.progArgs, insn.argsI() + 9);
   return sdCapsule(rayP - p, a, b, r);
 }
 [ForceInline]
@@ -310,10 +291,10 @@ float evalCappedCylinder(SdfInstruction insn, float3 rayP) {
   float3 a;
   float3 b;
   float r;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  a = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
-  b = READ_FLOAT3(sdfProgArgs, insn.argsI() + 6);
-  r = READ_FLOAT(sdfProgArgs, insn.argsI() + 9);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  a = READ_FLOAT3(push.progArgs, insn.argsI() + 3);
+  b = READ_FLOAT3(push.progArgs, insn.argsI() + 6);
+  r = READ_FLOAT(push.progArgs, insn.argsI() + 9);
   return sdCappedCylinder(rayP - p, a, b, r);
 }
 [ForceInline]
@@ -322,10 +303,10 @@ float evalRoundedCylinder(SdfInstruction insn, float3 rayP) {
   float ra;
   float rb;
   float h;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  ra = READ_FLOAT(sdfProgArgs, insn.argsI() + 3);
-  rb = READ_FLOAT(sdfProgArgs, insn.argsI() + 4);
-  h = READ_FLOAT(sdfProgArgs, insn.argsI() + 5);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  ra = READ_FLOAT(push.progArgs, insn.argsI() + 3);
+  rb = READ_FLOAT(push.progArgs, insn.argsI() + 4);
+  h = READ_FLOAT(push.progArgs, insn.argsI() + 5);
   return sdRoundedCylinder(rayP - p, ra, rb, h);
 }
 [ForceInline]
@@ -333,25 +314,25 @@ float evalCutSphere(SdfInstruction insn, float3 rayP) {
   float3 p;
   float r;
   float h;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  r = READ_FLOAT(sdfProgArgs, insn.argsI() + 3);
-  h = READ_FLOAT(sdfProgArgs, insn.argsI() + 4);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  r = READ_FLOAT(push.progArgs, insn.argsI() + 3);
+  h = READ_FLOAT(push.progArgs, insn.argsI() + 4);
   return sdCutSphere(rayP - p, r, h);
 }
 [ForceInline]
 float evalOctahedron(SdfInstruction insn, float3 rayP) {
   float3 p;
   float s;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  s = READ_FLOAT(sdfProgArgs, insn.argsI() + 3);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  s = READ_FLOAT(push.progArgs, insn.argsI() + 3);
   return sdOctahedron(rayP - p, s);
 }
 [ForceInline]
 float evalPyramid(SdfInstruction insn, float3 rayP) {
   float3 p;
   float h;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  h = READ_FLOAT(sdfProgArgs, insn.argsI() + 3);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  h = READ_FLOAT(push.progArgs, insn.argsI() + 3);
   return sdPyramid(rayP - p, h);
 }
 [ForceInline]
@@ -360,10 +341,10 @@ float evalTriangle(SdfInstruction insn, float3 rayP) {
   float3 a;
   float3 b;
   float3 c;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  a = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
-  b = READ_FLOAT3(sdfProgArgs, insn.argsI() + 6);
-  c = READ_FLOAT3(sdfProgArgs, insn.argsI() + 9);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  a = READ_FLOAT3(push.progArgs, insn.argsI() + 3);
+  b = READ_FLOAT3(push.progArgs, insn.argsI() + 6);
+  c = READ_FLOAT3(push.progArgs, insn.argsI() + 9);
   return udTriangle(rayP - p, a, b, c);
 }
 [ForceInline]
@@ -373,11 +354,11 @@ float evalQuad(SdfInstruction insn, float3 rayP) {
   float3 b;
   float3 c;
   float3 d;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  a = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
-  b = READ_FLOAT3(sdfProgArgs, insn.argsI() + 6);
-  c = READ_FLOAT3(sdfProgArgs, insn.argsI() + 9);
-  d = READ_FLOAT3(sdfProgArgs, insn.argsI() + 12);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  a = READ_FLOAT3(push.progArgs, insn.argsI() + 3);
+  b = READ_FLOAT3(push.progArgs, insn.argsI() + 6);
+  c = READ_FLOAT3(push.progArgs, insn.argsI() + 9);
+  d = READ_FLOAT3(push.progArgs, insn.argsI() + 12);
   return udQuad(rayP - p, a, b, c, d);
 }
 [ForceInline]
@@ -385,23 +366,21 @@ float evalPlane(SdfInstruction insn, float3 rayP) {
   float3 p;
   float3 n;
   float h;
-  p = READ_FLOAT3(sdfProgArgs, insn.argsI());
-  n = READ_FLOAT3(sdfProgArgs, insn.argsI() + 3);
-  h = READ_FLOAT(sdfProgArgs, insn.argsI() + 6);
+  p = READ_FLOAT3(push.progArgs, insn.argsI());
+  n = READ_FLOAT3(push.progArgs, insn.argsI() + 3);
+  h = READ_FLOAT(push.progArgs, insn.argsI() + 6);
   return sdPlane(rayP - p, n, h);
 }
 
-// NOTE: Making an interpreter specialized for right-leaning trees might have better performance?
 struct SdfProgramScene : IColoredFloatSdfScene {
   // Specialization keeps material work out of marching, normals and shadow rays.
   static float evaluate<let withColor : bool>(float3 p, out float3 color) {
-    uint insnCount, stride;
-    sdfProg.GetDimensions(insnCount, stride);
+    uint insnCount = push.instructionCount;
     SdfProgramRuntimeData runtimeData = { 0 };
     float res = float.maxValue;
     color = float3(1);
     for (uint i = 0; i < insnCount; i++) {
-      SdfInstruction insn = sdfProg[i];
+      SdfInstruction insn = push.prog[i];
 
       switch (insn.kind()) {
       case SdfInstructionKind.AddOp:
@@ -480,13 +459,14 @@ struct SdfProgramScene : IColoredFloatSdfScene {
 
       if (withColor) {
         if (insn.kind() >= SdfInstructionKind.Sphere) {
-          color = sdfProgData[0].materialData[insn.materialI()].color;
+          color = push.progData.materialData[insn.materialI()].color;
         } else {
+          float weight = 0.5;
           uint a = insn.runtimeArgsI();
-          uint b = a + 1;
+          uint b = insn.runtimeArgsI() + 1;
           float d1 = runtimeData.outputs[a];
           float d2 = runtimeData.outputs[b];
-          float weight = 0;
+
           switch (insn.kind()) {
           case SdfInstructionKind.AddOp:
             weight = d1 <= d2 ? 1 : 0;
@@ -506,12 +486,12 @@ struct SdfProgramScene : IColoredFloatSdfScene {
             d2 = -d2;
             // fall through to the smooth minimum used by opSmoothSubtraction
           case SdfInstructionKind.SmoothAddOp: {
-            float k = READ_FLOAT(sdfProgArgs, insn.argsI()) * 4.0;
+            float k = READ_FLOAT(push.progArgs, insn.argsI()) * 4.0;
             weight = saturate(0.5 + (d2 - d1) / (2.0 * k));
             break;
           }
           case SdfInstructionKind.SmoothInterOp: {
-            float k = READ_FLOAT(sdfProgArgs, insn.argsI()) * 4.0;
+            float k = READ_FLOAT(push.progArgs, insn.argsI()) * 4.0;
             weight = saturate(0.5 + (d1 - d2) / (2.0 * k));
             break;
           }
@@ -619,7 +599,7 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
 
   float rayDist, lastStepLen;
   uint stepCount;
-  var rayHit = sphereTrace(sceneFn, scene.camPos, rayDirection, rayDist, lastStepLen, stepCount);
+  var rayHit = sphereTrace(sceneFn, push.scene.camPos, rayDirection, rayDist, lastStepLen, stepCount);
   if (rayHit.hasValue) {
     let hitPos = rayHit.value;
     // NOTE: Using doubles to calculate normals could make shimmering normals at edges much rarer
@@ -629,23 +609,22 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
     float3 worldNormal = calcNormal(sceneFn, safePos);
     float3 hitColor = sceneFn.surfaceColor(hitPos);
 
-    switch (debugOpt.mode) {
+    switch (push.debugOpt.mode) {
     case RenderMode.BasicLitScene: {
-      output.color = float4(scene.ambientLightColor * hitColor, 1.0);
-      float3 dirToLight = -scene.mainLightDirection;
-      output.color.xyz += lambertDiffuse(dirToLight, worldNormal, scene.mainLightColor, hitColor);
-      output.color.xyz += blinnPhongSpecular(dirToLight, worldNormal, rayDirection, scene.mainLightColor,
-                                             hitColor, scene.specularExponent);
+      output.color = float4(push.scene.ambientLightColor * hitColor, 1.0);
+      float3 dirToLight = -push.scene.mainLightDirection;
+      output.color.xyz += lambertDiffuse(dirToLight, worldNormal, push.scene.mainLightColor, hitColor);
+      output.color.xyz += blinnPhongSpecular(dirToLight, worldNormal, rayDirection, push.scene.mainLightColor,
+                                             hitColor, push.scene.specularExponent);
 
-      uint lightCount, stride;
-      pointLights.GetDimensions(lightCount, stride);
+      uint lightCount = push.lightCount;
       for (uint i = 0; i < lightCount; i++) {
-        let pointLight = pointLights[i];
+        let pointLight = push.pointLights[i];
         let dirToLight = normalize(pointLight.position - hitPos);
         float3 lightColor = pointLight.getIntensity(hitPos);
         output.color.xyz += lambertDiffuse(dirToLight, worldNormal, lightColor, hitColor);
         output.color.xyz +=
-          blinnPhongSpecular(dirToLight, worldNormal, rayDirection, lightColor, hitColor, scene.specularExponent);
+          blinnPhongSpecular(dirToLight, worldNormal, rayDirection, lightColor, hitColor, push.scene.specularExponent);
       }
       return;
     }
@@ -653,23 +632,22 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
       const float shadowSoftness = 1.0 / 32.0; // Standard softness parameter (k = 32.0). Smaller is sharper.
       const float secondaryRayNudgeDist =
         0.01; // Normal offset to prevent self-shadowing acne
-      float3 ambientColor = scene.ambientLightColor * hitColor;
+      float3 ambientColor = push.scene.ambientLightColor * hitColor;
       output.color = float4(ambientColor, 1.0);
 
       // Directional light
-      float3 dirToLight = -scene.mainLightDirection;
+      float3 dirToLight = -push.scene.mainLightDirection;
       let lightContribution = sphereTraceShadow(sceneFn, hitPos + secondaryRayNudgeDist * worldNormal, dirToLight,
                                                 shadowSoftness, rayDist, lastStepLen, stepCount);
-      float3 diffuseColor = lambertDiffuse(dirToLight, worldNormal, scene.mainLightColor, hitColor);
-      float3 specularColor = blinnPhongSpecular(dirToLight, worldNormal, rayDirection, scene.mainLightColor,
-                                                hitColor, scene.specularExponent);
+      float3 diffuseColor = lambertDiffuse(dirToLight, worldNormal, push.scene.mainLightColor, hitColor);
+      float3 specularColor = blinnPhongSpecular(dirToLight, worldNormal, rayDirection, push.scene.mainLightColor,
+                                                hitColor, push.scene.specularExponent);
       output.color.xyz += lightContribution * (diffuseColor + specularColor);
 
       // Point lights
-      uint lightCount, stride;
-      pointLights.GetDimensions(lightCount, stride);
+      uint lightCount = push.lightCount;
       for (uint i = 0; i < lightCount; i++) {
-        let pointLight = pointLights[i];
+        let pointLight = push.pointLights[i];
         float3 lightColor = pointLight.getIntensity(hitPos);
         if (length(lightColor) > 0.001) {
           let vecToLight = pointLight.position - hitPos;
@@ -679,7 +657,7 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
                               rayDist, lastStepLen, stepCount, length(vecToLight));
           float3 diffuseColor = lambertDiffuse(dirToLight, worldNormal, lightColor, hitColor);
           float3 specularColor = blinnPhongSpecular(dirToLight, worldNormal, rayDirection, lightColor, hitColor,
-                                                    scene.specularExponent);
+                                                    push.scene.specularExponent);
           output.color.xyz += lightContribution * (diffuseColor + specularColor);
         }
       }
@@ -700,32 +678,20 @@ void renderScene<T>(T sceneFn, inout FragmentOutput output, float3 rayDirection)
   }
 
   // Set to background color to prevent weird colors for pixels with no hits
-  output.color = float4(scene.bgColor, 1.0);
+  output.color = float4(push.scene.bgColor, 1.0);
 }
 
-// Check the fragment shader code to make sure it matches a basic raytraced camera setup. This was done very quickly to
-// see if a fullscreen shader works.
-[shader("fragment")]
-FragmentOutput fragmentMain(VertexOutput input) {
-  FragmentOutput output = (FragmentOutput)0;
-
-  float2 uvNdc = input.fragUv * 2.0 - 1.0;
-  uvNdc.x *= scene.aspect;
-  float z = 1.0 / tan(radians(scene.fov) * 0.5); // Image plane depth
-  float3 rayDirection = normalize(scene.camForward * z + scene.camRight * uvNdc.x + scene.camUp * uvNdc.y);
-
-  renderScene(SdfProgramScene(), output, rayDirection);
-  // NOTE: Add a toggle for this in case someone uses this renderer on a display that has built-in dithering. That could
-  // cause visible interference patterns between the two types of dithering.
-  output.color += gradientNoiseWithStrength(input.fragCoord.xy, 1.0);
-
-  // Ray direction visualization
-  // output.color = float4(0.5 * rayDir + 0.5, 1.0);
-  return output;
+[ForceInline]
+float linearToSrgb(float c) {
+  return (c <= 0.0031308) ? (c * 12.92) : (1.055 * pow(max(c, 0.0), 1.0 / 2.4) - 0.055);
 }
 
-// Compute shader variant of the renderer. It computes the same image as fragmentMain but writes the result to an output
-// image that is later blitted to the screen. This exists to test whether a compute shader improves performance.
+[ForceInline]
+float3 linearToSrgb(float3 c) {
+  return float3(linearToSrgb(c.r), linearToSrgb(c.g), linearToSrgb(c.b));
+}
+
+// Compute shader variant of the renderer with direct BDA pointers and push constants.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void computeMain(uint3 threadId: SV_DispatchThreadID) {
@@ -737,13 +703,14 @@ void computeMain(uint3 threadId: SV_DispatchThreadID) {
   FragmentOutput output = (FragmentOutput)0;
 
   float2 fragUv = (float2(threadId.xy) + 0.5) / float2(width, height);
-  float2 uvNdc = fragUv * 2.0 - 1.0;
-  uvNdc.x *= scene.aspect;
-  float z = 1.0 / tan(radians(scene.fov) * 0.5); // Image plane depth
-  float3 rayDirection = normalize(scene.camForward * z + scene.camRight * uvNdc.x + scene.camUp * uvNdc.y);
+  float2 uvNdc = float2(fragUv.x * 2.0 - 1.0, 1.0 - fragUv.y * 2.0);
+  uvNdc.x *= push.scene.aspect;
+  float z = 1.0 / tan(radians(push.scene.fov) * 0.5); // Image plane depth
+  float3 rayDirection = normalize(push.scene.camForward * z + push.scene.camRight * uvNdc.x + push.scene.camUp * uvNdc.y);
 
   renderScene(SdfProgramScene(), output, rayDirection);
-  output.color += gradientNoiseWithStrength(float2(threadId.xy) + 0.5, 1.0);
+  float2 noiseCoord = float2(float(threadId.x) + 0.5, float(height - 1 - threadId.y) + 0.5);
+  output.color += gradientNoiseWithStrength(noiseCoord, 1.0);
 
-  outputImage[threadId.xy] = output.color;
+  outputImage[threadId.xy] = float4(linearToSrgb(output.color.rgb), output.color.a);
 }

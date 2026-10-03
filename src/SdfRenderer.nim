@@ -19,7 +19,7 @@ type
     SoftShadowsTest
 
 # Compile Slang compute shader and generate Nim BDA struct types
-const sdfData = compileSlangShader("shaders/SdfRendererVk.slang")
+const sdfData = compileSlangShader("shaders/SdfRenderer.slang")
 generateNimObjects(parseShaderReflection(sdfData), [
   "SceneUniforms",
   "DebugSettings",
