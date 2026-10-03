@@ -1,7 +1,5 @@
 import std/[strformat, options]
-import ./glad/Gl
 import pkg/glm
-import GlUtils
 
 # ======================================== Camera handling and basic transforms ========================================
 const degToRad = PI / 180

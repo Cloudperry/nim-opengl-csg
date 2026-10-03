@@ -1,16 +1,11 @@
 # Package
 version = "0.1.0"
 author = "Roni"
-description = "A computer graphics project in Nim and OpenGL"
+description = "A computer graphics project using Nim and Vulkan compute shaders"
 srcDir = "src"
 binDir = "bin"
 namedBin["SdfRenderer"] = "sdf-renderer"
-namedBin["SdfRendererGl"] = "sdf-renderer-gl"
-namedBin["SdfRendererFragment"] = "sdf-renderer-fragment"
-namedBin["BasicVulkan"] = "basic-vulkan"
-namedBin["../tests/TestCheckpoint1"] = "test-checkpoint1"
-namedBin["../tests/TestCheckpoint2"] = "test-checkpoint2"
-namedBin["../tests/TestCheckpoint4"] = "test-checkpoint4"
+namedBin["GpuStreamSampleApp"] = "vulkan-particles"
 backend = "c"
 license = "MIT"
 
