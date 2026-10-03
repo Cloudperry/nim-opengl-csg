@@ -1,7 +1,5 @@
 import std/[strformat, options, lenientops]
-import pkg/[glm]
-import ./glad/Gl
-import GlUtils
+import pkg/vmath
 
 type
   SdfInstructionKind* {.size: sizeof(uint8).} = enum
@@ -32,29 +30,27 @@ type
     Plane
 
   Material* = object
-    color*: Vec3f
-    metalness: GLfloat
+    color*: Vec3
+    metalness*: float32
 
   # A distinct type could be used to give extra type safety for material, argument and runtime data indices. Its a bit annoying though,
   # because there is no easy way to borrow all operators for a distinct type.
   # ArgIndex* = distinct uint32
 
-makeSsbo:
-  type
-    SdfProgramData* = object
-      materialData*: array[256, Material]
+  SdfProgramData* = object
+    materialData*: array[256, Material]
 
-    SdfProgramInputs* = object
-      args*: seq[uint32]
+  SdfProgramInputs* = object
+    args*: seq[uint32]
 
-    SdfInstruction* = object
-      kind*: SdfInstructionKind
-      runtimeArgsI*: uint8
-      argsI*: uint16
-      outputI*: uint8
-      materialI*: uint8
-      argCount*: uint8
-      runtimeArgCount*: uint8
+  SdfInstruction* = object
+    kind*: SdfInstructionKind
+    runtimeArgsI*: uint8
+    argsI*: uint16
+    outputI*: uint8
+    materialI*: uint8
+    argCount*: uint8
+    runtimeArgCount*: uint8
 
 proc emptySdfProgram*(): seq[SdfInstruction] =
   @[]
@@ -78,10 +74,10 @@ proc initSceneBuilder*(
     inputs: ref SdfProgramInputs,
     instructions: ref seq[SdfInstruction],
 ): SceneBuilder =
-  data.materialData[0] = Material(color: vec3f(1))
+  data.materialData[0] = Material(color: vec3(1.0f32, 1.0f32, 1.0f32))
   SceneBuilder(data: data, inputs: inputs, instructions: instructions)
 
-proc addMaterial*(prog: var SceneBuilder, color: Vec3f): uint8 =
+proc addMaterial*(prog: var SceneBuilder, color: Vec3): uint8 =
   ## Registers a linear RGB color. Slot zero is the default white material.
   for channel in 0 .. 2:
     if not (color[channel] >= 0 and color[channel] <= 1):
@@ -100,10 +96,10 @@ proc useMaterial*(prog: var SceneBuilder, materialI: uint8) =
 
 proc addDefaultPalette*(prog: var SceneBuilder): tuple[wall, stone, ball, wood: uint8] =
   (
-    wall: prog.addMaterial(vec3f(0.72, 0.66, 0.55)),
-    stone: prog.addMaterial(vec3f(0.45, 0.32, 0.20)),
-    ball: prog.addMaterial(vec3f(0.06, 0.82, 0.70)),
-    wood: prog.addMaterial(vec3f(0.50, 0.26, 0.12)),
+    wall: prog.addMaterial(vec3(0.72f32, 0.66f32, 0.55f32)),
+    stone: prog.addMaterial(vec3(0.45f32, 0.32f32, 0.20f32)),
+    ball: prog.addMaterial(vec3(0.06f32, 0.82f32, 0.70f32)),
+    wood: prog.addMaterial(vec3(0.50f32, 0.26f32, 0.12f32)),
   )
 
 # TODO: Split to different functions for shapes and operators to make the fn call signature less messy
@@ -133,9 +129,8 @@ proc addArgs(prog: var SceneBuilder, args: openArray[uint32]) =
   prog.inputs.args &= args
   prog.nextArgI += args.len.uint16
 
-# This is broken but why?
 proc size(params: openArray[uint32]): uint32 =
-  sizeof(params) div 4 # How many uint32s is this params array?
+  sizeof(params).uint32 div 4 # How many uint32s is this params array?
 
 proc addInsnWithOutput(
     prog: var SceneBuilder, i: SdfInstruction
@@ -168,33 +163,12 @@ proc addInsnWithOutput(
   when defined(showSdfInstructions):
     echo fmt"Instruction {prog.instructions[].high}: {instruction}"
 
-#[
-Code that was used to test slot overwrite protection:
-
-let innerBox = sdfRenderer.sceneBuilder.addRoundBox(vec3f(0, 0, 0), vec3f(9, 3, 9), 0.5).outputI
-let outerBox = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, 0), vec3f(10, 5, 10)).outputI
-var windowNorth = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
-windowNorth = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
-windowNorth = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
-windowNorth = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
-windowNorth = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
-windowNorth = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
-windowNorth = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
-windowNorth = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
-let room = sdfRenderer.sceneBuilder.cut(innerBox, outerBox)
-windowNorth = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
-# This will cause an overwrite:
-# windowNorth = sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
-
-This would make for a good test...
-]#
-
-const defaultRoundingFactor: GLfloat = 0.25
+const defaultRoundingFactor: float32 = 0.25f32
 
 # These functions return the output parameter slot where their results will be written
 # TODO: Generate from function signature using macros?
 proc addSphere*(
-    prog: var SceneBuilder, p: Vec3f, r: GLfloat
+    prog: var SceneBuilder, p: Vec3, r: float32
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, r]
   result = prog.addInsnWithOutput makeInsn(
@@ -203,7 +177,7 @@ proc addSphere*(
   prog.addArgs args
 
 proc addBox*(
-    prog: var SceneBuilder, p: Vec3f, halfExtents: Vec3f
+    prog: var SceneBuilder, p: Vec3, halfExtents: Vec3
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, halfExtents.x, halfExtents.y, halfExtents.z]
   result = prog.addInsnWithOutput makeInsn(
@@ -212,7 +186,7 @@ proc addBox*(
   prog.addArgs args
 
 proc addRoundBox*(
-    prog: var SceneBuilder, p: Vec3f, halfExtents: Vec3f, r = defaultRoundingFactor
+    prog: var SceneBuilder, p: Vec3, halfExtents: Vec3, r = defaultRoundingFactor
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, halfExtents.x, halfExtents.y, halfExtents.z, r]
   result = prog.addInsnWithOutput makeInsn(
@@ -221,7 +195,7 @@ proc addRoundBox*(
   prog.addArgs args
 
 proc addBoxFrame*(
-    prog: var SceneBuilder, p: Vec3f, halfExtents: Vec3f, e: GLfloat
+    prog: var SceneBuilder, p: Vec3, halfExtents: Vec3, e: float32
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, halfExtents.x, halfExtents.y, halfExtents.z, e]
   result = prog.addInsnWithOutput makeInsn(
@@ -230,7 +204,7 @@ proc addBoxFrame*(
   prog.addArgs args
 
 proc addCone*(
-    prog: var SceneBuilder, p: Vec3f, c: Vec2f, h: GLfloat
+    prog: var SceneBuilder, p: Vec3, c: Vec2, h: float32
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, c.x, c.y, h]
   result = prog.addInsnWithOutput makeInsn(
@@ -239,7 +213,7 @@ proc addCone*(
   prog.addArgs args
 
 proc addCappedCone*(
-    prog: var SceneBuilder, p, a, b: Vec3f, ra, rb: GLfloat
+    prog: var SceneBuilder, p, a, b: Vec3, ra, rb: float32
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, a.x, a.y, a.z, b.x, b.y, b.z, ra, rb]
   result = prog.addInsnWithOutput makeInsn(
@@ -248,7 +222,7 @@ proc addCappedCone*(
   prog.addArgs args
 
 proc addHexPrism*(
-    prog: var SceneBuilder, p: Vec3f, h: Vec2f
+    prog: var SceneBuilder, p: Vec3, h: Vec2
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, h.x, h.y]
   result = prog.addInsnWithOutput makeInsn(
@@ -257,7 +231,7 @@ proc addHexPrism*(
   prog.addArgs args
 
 proc addTriPrism*(
-    prog: var SceneBuilder, p: Vec3f, h: Vec2f
+    prog: var SceneBuilder, p: Vec3, h: Vec2
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, h.x, h.y]
   result = prog.addInsnWithOutput makeInsn(
@@ -266,7 +240,7 @@ proc addTriPrism*(
   prog.addArgs args
 
 proc addCapsule*(
-    prog: var SceneBuilder, p: Vec3f, h, r: GLfloat
+    prog: var SceneBuilder, p: Vec3, h, r: float32
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, h, r]
   result = prog.addInsnWithOutput makeInsn(
@@ -275,7 +249,7 @@ proc addCapsule*(
   prog.addArgs args
 
 proc addCappedCylinder*(
-    prog: var SceneBuilder, p, a, b: Vec3f, r: GLfloat
+    prog: var SceneBuilder, p, a, b: Vec3, r: float32
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, a.x, a.y, a.z, b.x, b.y, b.z, r]
   result = prog.addInsnWithOutput makeInsn(
@@ -284,7 +258,7 @@ proc addCappedCylinder*(
   prog.addArgs args
 
 proc addRoundedCylinder*(
-    prog: var SceneBuilder, p: Vec3f, ra, rb: GLfloat, h = defaultRoundingFactor
+    prog: var SceneBuilder, p: Vec3, ra, rb: float32, h = defaultRoundingFactor
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, ra, rb, h]
   result = prog.addInsnWithOutput makeInsn(
@@ -293,7 +267,7 @@ proc addRoundedCylinder*(
   prog.addArgs args
 
 proc addCutSphere*(
-    prog: var SceneBuilder, p: Vec3f, r, h: GLfloat
+    prog: var SceneBuilder, p: Vec3, r, h: float32
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, r, h]
   result = prog.addInsnWithOutput makeInsn(
@@ -302,7 +276,7 @@ proc addCutSphere*(
   prog.addArgs args
 
 proc addOctahedron*(
-    prog: var SceneBuilder, p: Vec3f, s: GLfloat
+    prog: var SceneBuilder, p: Vec3, s: float32
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, s]
   result = prog.addInsnWithOutput makeInsn(
@@ -311,7 +285,7 @@ proc addOctahedron*(
   prog.addArgs args
 
 proc addPyramid*(
-    prog: var SceneBuilder, p: Vec3f, h: GLfloat
+    prog: var SceneBuilder, p: Vec3, h: float32
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, h]
   result = prog.addInsnWithOutput makeInsn(
@@ -320,7 +294,7 @@ proc addPyramid*(
   prog.addArgs args
 
 proc addTriangle*(
-    prog: var SceneBuilder, p, a, b, c: Vec3f
+    prog: var SceneBuilder, p, a, b, c: Vec3
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z]
   result = prog.addInsnWithOutput makeInsn(
@@ -329,7 +303,7 @@ proc addTriangle*(
   prog.addArgs args
 
 proc addQuad*(
-    prog: var SceneBuilder, p, a, b, c, d: Vec3f
+    prog: var SceneBuilder, p, a, b, c, d: Vec3
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [
     p.x, p.y, p.z, a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z, d.x, d.y, d.z
@@ -340,7 +314,7 @@ proc addQuad*(
   prog.addArgs args
 
 proc addPlane*(
-    prog: var SceneBuilder, p, n: Vec3f, h: GLfloat
+    prog: var SceneBuilder, p, n: Vec3, h: float32
 ): tuple[outputI: uint8, instI: int] =
   makeUintArgs [p.x, p.y, p.z, n.x, n.y, n.z, h]
   result = prog.addInsnWithOutput makeInsn(

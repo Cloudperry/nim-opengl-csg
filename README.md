@@ -21,9 +21,9 @@ Register linear RGB colors with `SceneBuilder.addMaterial`, then select a materi
 with `useMaterial` before adding primitives:
 
 ```nim
-let leafGreen = builder.addMaterial(vec3f(0.075, 0.36, 0.045))
+let leafGreen = builder.addMaterial(vec3(0.075, 0.36, 0.045))
 builder.useMaterial(leafGreen)
-let ball = builder.addSphere(vec3f(0), 2)
+let ball = builder.addSphere(vec3(0), 2)
 ```
 
 The selected material applies to all subsequent primitives until changed. Material

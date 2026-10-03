@@ -2,13 +2,9 @@ import
   std/[strformat, math, monotimes]
 import std/times except `getTime`
 import pkg/vmath
-import pkg/glm except Vec2, Vec3, Vec4, Mat2, Mat3, Mat4
 import pkg/confutils
 import sdl3 except GPUDevice, GPUTexture, GPUBuffer, GPUSampler
 import GpuStream, SlangIntegration, Logger, Scene, SdfScene
-
-proc toVmath(v: Vec3f): vmath.Vec3 {.inline.} =
-  vec3(v.x, v.y, v.z)
 
 type
   RenderMode* {.size: sizeof(uint32).} = enum
@@ -144,31 +140,31 @@ proc dynamicObjectsScene() =
   let palette = sdfRenderer.sceneBuilder.addDefaultPalette()
   sdfRenderer.sceneBuilder.useMaterial(palette.wall)
   let innerBox =
-    sdfRenderer.sceneBuilder.addRoundBox(vec3f(0, 0, 0), vec3f(9, 3, 9), 0.5).outputI
+    sdfRenderer.sceneBuilder.addRoundBox(vec3(0, 0, 0), vec3(9, 3, 9), 0.5).outputI
   let outerBox =
-    sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, 0), vec3f(10, 5, 10)).outputI
+    sdfRenderer.sceneBuilder.addBox(vec3(0, 0, 0), vec3(10, 5, 10)).outputI
   let windowNorth =
-    sdfRenderer.sceneBuilder.addBox(vec3f(0, 0, -9), vec3f(1.5, 1.5, 2)).outputI
+    sdfRenderer.sceneBuilder.addBox(vec3(0, 0, -9), vec3(1.5, 1.5, 2)).outputI
   var room = sdfRenderer.sceneBuilder.cut(innerBox, outerBox).outputI
-  sdfRenderer.dynamicCutter = sdfRenderer.sceneBuilder.addBox(vec3f(0), vec3f(1.5))
+  sdfRenderer.dynamicCutter = sdfRenderer.sceneBuilder.addBox(vec3(0), vec3(1.5))
   room = sdfRenderer.sceneBuilder.cut(windowNorth, room).outputI
   room = sdfRenderer.sceneBuilder.cut(sdfRenderer.dynamicCutter.outputI, room).outputI
   sdfRenderer.sceneBuilder.useMaterial(palette.ball)
-  sdfRenderer.movingSphere = sdfRenderer.sceneBuilder.addSphere(vec3f(0, 0, 0), 2)
+  sdfRenderer.movingSphere = sdfRenderer.sceneBuilder.addSphere(vec3(0, 0, 0), 2)
   room = sdfRenderer.sceneBuilder.smoothlyCombine(
     room, sdfRenderer.movingSphere.outputI
   ).outputI
   sdfRenderer.sceneBuilder.useMaterial(palette.wood)
   let box1 =
-    sdfRenderer.sceneBuilder.addBox(vec3f(0, -2, 6), vec3f(2.5, 1, 2.5)).outputI
+    sdfRenderer.sceneBuilder.addBox(vec3(0, -2, 6), vec3(2.5, 1, 2.5)).outputI
   sdfRenderer.sceneBuilder.useMaterial(palette.wall)
   let roofWindow =
-    sdfRenderer.sceneBuilder.addBox(vec3f(0, 5, 6), vec3f(3, 2.5, 3)).outputI
+    sdfRenderer.sceneBuilder.addBox(vec3(0, 5, 6), vec3(3, 2.5, 3)).outputI
   room = sdfRenderer.sceneBuilder.combine(room, box1).outputI
   room = sdfRenderer.sceneBuilder.cut(roofWindow, room).outputI
   sdfRenderer.sceneBuilder.useMaterial(palette.stone)
   let ground =
-    sdfRenderer.sceneBuilder.addPlane(vec3f(0, -5, 0), vec3f(0, 1, 0), 0).outputI
+    sdfRenderer.sceneBuilder.addPlane(vec3(0, -5, 0), vec3(0, 1, 0), 0).outputI
   discard sdfRenderer.sceneBuilder.combine(room, ground)
 
   copyMem(sdfRenderer.progDataSlice.hostPtr, sdfRenderer.sceneProgramData[].addr, sizeof(SdfProgramData))
@@ -194,12 +190,12 @@ proc softShadowsScene() =
   )
 
   let ground =
-    sdfRenderer.sceneBuilder.addPlane(vec3f(0, -5, 0), vec3f(0, 1, 0), 0).outputI
-  let box1 = sdfRenderer.sceneBuilder.addBox(vec3f(-5, -1, 0), vec3f(2, 4, 2)).outputI
+    sdfRenderer.sceneBuilder.addPlane(vec3(0, -5, 0), vec3(0, 1, 0), 0).outputI
+  let box1 = sdfRenderer.sceneBuilder.addBox(vec3(-5, -1, 0), vec3(2, 4, 2)).outputI
   let gb1 = sdfRenderer.sceneBuilder.combine(ground, box1).outputI
-  let box2 = sdfRenderer.sceneBuilder.addBox(vec3f(0, -2, -5), vec3f(1, 3, 1)).outputI
+  let box2 = sdfRenderer.sceneBuilder.addBox(vec3(0, -2, -5), vec3(1, 3, 1)).outputI
   let gb2 = sdfRenderer.sceneBuilder.combine(gb1, box2).outputI
-  let box3 = sdfRenderer.sceneBuilder.addBox(vec3f(4, -3, -10), vec3f(1, 2, 1)).outputI
+  let box3 = sdfRenderer.sceneBuilder.addBox(vec3(4, -3, -10), vec3(1, 2, 1)).outputI
   discard sdfRenderer.sceneBuilder.combine(gb2, box3)
 
   copyMem(sdfRenderer.progDataSlice.hostPtr, sdfRenderer.sceneProgramData[].addr, sizeof(SdfProgramData))
@@ -246,7 +242,7 @@ proc updateCamera(frame: FrameState) =
   if not state.cameraLocked:
     var numKeys: cint
     let keyState = getKeyboardState(numKeys)
-    var moveDirection = vec3f(0)
+    var moveDirection = vec3(0.0f32, 0.0f32, 0.0f32)
     if keyState[SCANCODE_COMMA.int] or keyState[SCANCODE_W.int]:
       moveDirection.z -= 1
     elif keyState[SCANCODE_O.int] or keyState[SCANCODE_S.int]:
@@ -297,7 +293,7 @@ proc draw(conf: Config) =
     sdfRenderer.target.resize(win, force = true)
     return
 
-  # TODO: ALL WRITES TO BDA BUFFERS NEED TO HAPPEN IN BETWEEN beginFrame AND present OR RACE CONDITIONS WILL HAPPEN. CHECK HOW TO HANDLE THIS PROPERLY.
+  # Writes to BDA buffers happen after beginFrame() (post-fence wait) and before present() to avoid race conditions
   updateSceneDynamicArgs()
 
   let w = sdfRenderer.target.width
@@ -306,10 +302,10 @@ proc draw(conf: Config) =
   sdfRenderer.sceneSlice[0].aspect = w.float32 / h.float32
   sdfRenderer.sceneSlice[0].bgColor = vec3(0.2f32, 0.3f32, 0.3f32)
   sdfRenderer.sceneSlice[0].fov = 80.0f32
-  sdfRenderer.sceneSlice[0].camPos = state.camera.pos.toVmath
-  sdfRenderer.sceneSlice[0].camForward = state.camera.forward.toVmath
-  sdfRenderer.sceneSlice[0].camRight = state.camera.right.toVmath
-  sdfRenderer.sceneSlice[0].camUp = state.camera.up.toVmath
+  sdfRenderer.sceneSlice[0].camPos = state.camera.pos
+  sdfRenderer.sceneSlice[0].camForward = state.camera.forward
+  sdfRenderer.sceneSlice[0].camRight = state.camera.right
+  sdfRenderer.sceneSlice[0].camUp = state.camera.up
 
   sdfRenderer.debugSlice[0].mode = sdfRenderer.renderMode.int32
 
@@ -381,14 +377,14 @@ proc main() =
 
   state.cameraOpts = FpCameraOptions()
   state.camera = initPerspectiveCamera(80, 1280 / 720, 0.1, 100, false)
-  let cameraLockPos = vec3f(conf.camLockX, conf.camLockY, conf.camLockZ)
+  let cameraLockPos = vec3(conf.camLockX, conf.camLockY, conf.camLockZ)
   state.camera.pos = cameraLockPos
   state.camera.yaw = conf.camLockYaw
   state.camera.pitch = conf.camLockPitch
   (state.camera.forward, state.camera.right, state.camera.up) =
     state.camera.getLocalDirections()
 
-  if cameraLockPos != vec3f(0) or (conf.camLockYaw, conf.camLockPitch) != (0.0f32, 0.0f32):
+  if cameraLockPos != vec3(0.0f32, 0.0f32, 0.0f32) or (conf.camLockYaw, conf.camLockPitch) != (0.0f32, 0.0f32):
     state.cameraLocked = true
   state.lockTime = conf.lockTime
 
