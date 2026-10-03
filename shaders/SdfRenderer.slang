@@ -132,6 +132,7 @@ struct FragmentOutput {
   float4 color;
 }
 
+// NOTE: Implemented by Gemini and checked using spirv-dis to be optimized out of the final shader
 struct ArgReader {
   uint* ptr;
   uint  offset;
