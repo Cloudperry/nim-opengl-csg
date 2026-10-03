@@ -15,13 +15,13 @@ struct SceneUniforms {
 // even replace the normal binary op versions. This method is possible to use with basically all commutative SDF ops.
 enum SdfInstructionKind {
   // Operations
-  AddOp,
-  SubOp,
-  InterOp,
-  XorOp,
-  SmoothAddOp,
-  SmoothSubOp,
-  SmoothInterOp,
+  Union,
+  Difference,
+  Intersection,
+  SymmetricDifference,
+  SmoothUnion,
+  SmoothDifference,
+  SmoothIntersection,
   // Shapes
   Sphere,
   Box,
@@ -156,55 +156,55 @@ struct ArgReader {
 
 // Operations eval
 [ForceInline]
-float evalAddOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData) {
+float evalUnion(SdfInstruction insn, SdfProgramRuntimeData runtimeData) {
   float d1 = runtimeData.outputs[insn.runtimeArgsI()];
   float d2 = runtimeData.outputs[insn.runtimeArgsI() + 1];
-  return opUnion(d1, d2);
+  return sdfUnion(d1, d2);
 }
 
 [ForceInline]
-float evalSubOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData) {
+float evalDifference(SdfInstruction insn, SdfProgramRuntimeData runtimeData) {
   float d1 = runtimeData.outputs[insn.runtimeArgsI()];
   float d2 = runtimeData.outputs[insn.runtimeArgsI() + 1];
-  return opSubtraction(d1, d2);
+  return sdfDifference(d1, d2);
 }
 
 [ForceInline]
-float evalInterOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData) {
+float evalIntersection(SdfInstruction insn, SdfProgramRuntimeData runtimeData) {
   float d1 = runtimeData.outputs[insn.runtimeArgsI()];
   float d2 = runtimeData.outputs[insn.runtimeArgsI() + 1];
-  return opIntersection(d1, d2);
+  return sdfIntersection(d1, d2);
 }
 
 [ForceInline]
-float evalXorOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData) {
+float evalSymmetricDifference(SdfInstruction insn, SdfProgramRuntimeData runtimeData) {
   float d1 = runtimeData.outputs[insn.runtimeArgsI()];
   float d2 = runtimeData.outputs[insn.runtimeArgsI() + 1];
-  return opXor(d1, d2);
+  return sdfSymmetricDifference(d1, d2);
 }
 
 [ForceInline]
-float evalSmoothAddOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData, inout ArgReader reader) {
+SdfBlend<float> evalSmoothUnion(SdfInstruction insn, SdfProgramRuntimeData runtimeData, inout ArgReader reader) {
   float d1 = runtimeData.outputs[insn.runtimeArgsI()];
   float d2 = runtimeData.outputs[insn.runtimeArgsI() + 1];
   float k = reader.nextFloat();
-  return opSmoothUnion(d1, d2, k);
+  return sdfSmoothUnion(d1, d2, k);
 }
 
 [ForceInline]
-float evalSmoothSubOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData, inout ArgReader reader) {
+SdfBlend<float> evalSmoothDifference(SdfInstruction insn, SdfProgramRuntimeData runtimeData, inout ArgReader reader) {
   float d1 = runtimeData.outputs[insn.runtimeArgsI()];
   float d2 = runtimeData.outputs[insn.runtimeArgsI() + 1];
   float k = reader.nextFloat();
-  return opSmoothSubtraction(d1, d2, k);
+  return sdfSmoothDifference(d1, d2, k);
 }
 
 [ForceInline]
-float evalSmoothInterOp(SdfInstruction insn, SdfProgramRuntimeData runtimeData, inout ArgReader reader) {
+SdfBlend<float> evalSmoothIntersection(SdfInstruction insn, SdfProgramRuntimeData runtimeData, inout ArgReader reader) {
   float d1 = runtimeData.outputs[insn.runtimeArgsI()];
   float d2 = runtimeData.outputs[insn.runtimeArgsI() + 1];
   float k = reader.nextFloat();
-  return opSmoothIntersection(d1, d2, k);
+  return sdfSmoothIntersection(d1, d2, k);
 }
 
 // Shapes eval
@@ -346,132 +346,95 @@ float evalPlane(inout ArgReader reader, float3 rayP) {
   return sdPlane(rayP - p, n, h);
 }
 
+#define EVAL_SDF_OP(kind) \
+  case SdfInstructionKind.kind: \
+    res = eval##kind(insn, runtimeData); \
+    break
+
+#define EVAL_SDF_SMOOTH_OP(kind) \
+  case SdfInstructionKind.kind: { \
+    SdfBlend<float> blend = eval##kind(insn, runtimeData, reader); \
+    res = blend.dist; \
+    opWeight = blend.weight; \
+    break; \
+  }
+
+#define EVAL_SDF_SHAPE(kind) \
+  case SdfInstructionKind.kind: \
+    res = eval##kind(reader, p); \
+    break
+
+#define EVAL_COLOR_OP(kind) \
+  case SdfInstructionKind.kind: \
+    weight = sdf##kind##Weight(d1, d2); \
+    break
+
+#define EVAL_COLOR_SMOOTH_OP(kind) \
+  case SdfInstructionKind.kind: \
+    weight = opWeight; \
+    break
+
 struct SdfProgramScene : IColoredFloatSdfScene {
   // Specialization keeps material work out of marching, normals and shadow rays.
   static float evaluate<let withColor : bool>(float3 p, out float3 color) {
     uint insnCount = push.instructionCount;
     SdfProgramRuntimeData runtimeData = { 0 };
     float res = float.maxValue;
+    float opWeight = 0.0;
     color = float3(1);
     for (uint i = 0; i < insnCount; i++) {
       SdfInstruction insn = push.prog[i];
       ArgReader reader = { push.progArgs, insn.argsI() };
 
       switch (insn.kind()) {
-      case SdfInstructionKind.AddOp:
-        res = evalAddOp(insn, runtimeData);
-        break;
-      case SdfInstructionKind.SubOp:
-        res = evalSubOp(insn, runtimeData);
-        break;
-      case SdfInstructionKind.InterOp:
-        res = evalInterOp(insn, runtimeData);
-        break;
-      case SdfInstructionKind.XorOp:
-        res = evalXorOp(insn, runtimeData);
-        break;
-      case SdfInstructionKind.SmoothAddOp:
-        res = evalSmoothAddOp(insn, runtimeData, reader);
-        break;
-      case SdfInstructionKind.SmoothSubOp:
-        res = evalSmoothSubOp(insn, runtimeData, reader);
-        break;
-      case SdfInstructionKind.SmoothInterOp:
-        res = evalSmoothInterOp(insn, runtimeData, reader);
-        break;
-      case SdfInstructionKind.Sphere:
-        res = evalSphere(reader, p);
-        break;
-      case SdfInstructionKind.Box:
-        res = evalBox(reader, p);
-        break;
-      case SdfInstructionKind.RoundBox:
-        res = evalRoundBox(reader, p);
-        break;
-      case SdfInstructionKind.BoxFrame:
-        res = evalBoxFrame(reader, p);
-        break;
-      case SdfInstructionKind.Cone:
-        res = evalCone(reader, p);
-        break;
-      case SdfInstructionKind.CappedCone:
-        res = evalCappedCone(reader, p);
-        break;
-      case SdfInstructionKind.HexPrism:
-        res = evalHexPrism(reader, p);
-        break;
-      case SdfInstructionKind.TriPrism:
-        res = evalTriPrism(reader, p);
-        break;
-      case SdfInstructionKind.Capsule:
-        res = evalCapsule(reader, p);
-        break;
-      case SdfInstructionKind.CappedCylinder:
-        res = evalCappedCylinder(reader, p);
-        break;
-      case SdfInstructionKind.RoundedCylinder:
-        res = evalRoundedCylinder(reader, p);
-        break;
-      case SdfInstructionKind.CutSphere:
-        res = evalCutSphere(reader, p);
-        break;
-      case SdfInstructionKind.Octahedron:
-        res = evalOctahedron(reader, p);
-        break;
-      case SdfInstructionKind.Pyramid:
-        res = evalPyramid(reader, p);
-        break;
-      case SdfInstructionKind.Triangle:
-        res = evalTriangle(reader, p);
-        break;
-      case SdfInstructionKind.Quad:
-        res = evalQuad(reader, p);
-        break;
-      case SdfInstructionKind.Plane:
-        res = evalPlane(reader, p);
-        break;
-      }
+        EVAL_SDF_OP(Union);
+        EVAL_SDF_OP(Difference);
+        EVAL_SDF_OP(Intersection);
+        EVAL_SDF_OP(SymmetricDifference);
+        EVAL_SDF_SMOOTH_OP(SmoothUnion);
+        EVAL_SDF_SMOOTH_OP(SmoothDifference);
+        EVAL_SDF_SMOOTH_OP(SmoothIntersection);
+        EVAL_SDF_SHAPE(Sphere);
+        EVAL_SDF_SHAPE(Box);
+        EVAL_SDF_SHAPE(RoundBox);
+        EVAL_SDF_SHAPE(BoxFrame);
+        EVAL_SDF_SHAPE(Cone);
+        EVAL_SDF_SHAPE(CappedCone);
+        EVAL_SDF_SHAPE(HexPrism);
+        EVAL_SDF_SHAPE(TriPrism);
+        EVAL_SDF_SHAPE(Capsule);
+        EVAL_SDF_SHAPE(CappedCylinder);
+        EVAL_SDF_SHAPE(RoundedCylinder);
+        EVAL_SDF_SHAPE(CutSphere);
+        EVAL_SDF_SHAPE(Octahedron);
+        EVAL_SDF_SHAPE(Pyramid);
+        EVAL_SDF_SHAPE(Triangle);
+        EVAL_SDF_SHAPE(Quad);
+        EVAL_SDF_SHAPE(Plane);
+      } // NOTE: Result of EVAL_X written after color eval because color needs "current" distances and not "next"
 
       if (withColor) {
         if (insn.kind() >= SdfInstructionKind.Sphere) {
           color = push.progData.materialData[insn.materialI()].color;
         } else {
-          float weight = 0.5;
           uint a = insn.runtimeArgsI();
           uint b = insn.runtimeArgsI() + 1;
           float d1 = runtimeData.outputs[a];
           float d2 = runtimeData.outputs[b];
+          let colA = runtimeData.colors[a];
+          let colB = runtimeData.colors[b];
+          float weight = 0.0;
 
           switch (insn.kind()) {
-          case SdfInstructionKind.AddOp:
-            weight = d1 <= d2 ? 1 : 0;
-            break;
-          case SdfInstructionKind.SubOp:
-            weight = -d1 >= d2 ? 1 : 0;
-            break;
-          case SdfInstructionKind.InterOp:
-            weight = d1 >= d2 ? 1 : 0;
-            break;
-          case SdfInstructionKind.XorOp:
-            // Follow the same min/max branches as opXor, including inside overlaps.
-            weight = min(d1, d2) >= -max(d1, d2)
-              ? (d1 <= d2 ? 1 : 0) : (d1 >= d2 ? 1 : 0);
-            break;
-          case SdfInstructionKind.SmoothSubOp:
-            d2 = -d2;
-            // fall through to the smooth minimum used by opSmoothSubtraction
-          case SdfInstructionKind.SmoothAddOp: {
-            float k = READ_FLOAT(push.progArgs, insn.argsI()) * 4.0;
-            weight = saturate(0.5 + (d2 - d1) / (2.0 * k));
-            break;
+            EVAL_COLOR_OP(Union);
+            EVAL_COLOR_OP(Difference);
+            EVAL_COLOR_OP(Intersection);
+            EVAL_COLOR_OP(SymmetricDifference);
+            EVAL_COLOR_SMOOTH_OP(SmoothUnion);
+            EVAL_COLOR_SMOOTH_OP(SmoothDifference);
+            EVAL_COLOR_SMOOTH_OP(SmoothIntersection);
           }
-          case SdfInstructionKind.SmoothInterOp: {
-            float k = READ_FLOAT(push.progArgs, insn.argsI()) * 4.0;
-            weight = saturate(0.5 + (d1 - d2) / (2.0 * k));
-            break;
-          }
-          }
-          color = lerp(runtimeData.colors[b], runtimeData.colors[a], weight);
+          color = lerp(colA, colB, weight);
         }
         runtimeData.colors[insn.outputI()] = color;
       }

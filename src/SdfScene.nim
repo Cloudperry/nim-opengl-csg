@@ -4,13 +4,13 @@ import pkg/vmath
 type
   SdfInstructionKind* {.size: sizeof(uint8).} = enum
     # Operations
-    AddOp
-    SubOp
-    InterOp
-    XorOp
-    SmoothAddOp
-    SmoothSubOp
-    SmoothInterOp # Shapes
+    Union
+    Difference
+    Intersection
+    SymmetricDifference
+    SmoothUnion
+    SmoothDifference
+    SmoothIntersection # Shapes
     Sphere
     Box
     RoundBox
@@ -336,7 +336,7 @@ proc combine*(
 ): tuple[outputI: uint8, instI: int] =
   assertContiguousInputs [d1Index, d2Index]
   result = prog.addInsnWithOutput makeInsn(
-    AddOp, uint16.high, prog.nextOutputI, 0, d1Index.some, 2.uint8.some
+    Union, uint16.high, prog.nextOutputI, 0, d1Index.some, 2.uint8.some
   )
 
 proc cut*(
@@ -344,7 +344,7 @@ proc cut*(
 ): tuple[outputI: uint8, instI: int] =
   assertContiguousInputs [d1Index, d2Index]
   result = prog.addInsnWithOutput makeInsn(
-    SubOp, uint16.high, prog.nextOutputI, 0, d1Index.some, 2.uint8.some
+    Difference, uint16.high, prog.nextOutputI, 0, d1Index.some, 2.uint8.some
   )
 
 proc intersect*(
@@ -352,7 +352,7 @@ proc intersect*(
 ): tuple[outputI: uint8, instI: int] =
   assertContiguousInputs [d1Index, d2Index]
   result = prog.addInsnWithOutput makeInsn(
-    InterOp, uint16.high, prog.nextOutputI, 0, d1Index.some, 2.uint8.some
+    Intersection, uint16.high, prog.nextOutputI, 0, d1Index.some, 2.uint8.some
   )
 
 proc combineWithoutOverlap*(
@@ -360,7 +360,7 @@ proc combineWithoutOverlap*(
 ): tuple[outputI: uint8, instI: int] =
   assertContiguousInputs [d1Index, d2Index]
   result = prog.addInsnWithOutput makeInsn(
-    XorOp, uint16.high, prog.nextOutputI, 0, d1Index.some, 2.uint8.some
+    SymmetricDifference, uint16.high, prog.nextOutputI, 0, d1Index.some, 2.uint8.some
   )
 
 proc smoothlyCombine*(
@@ -369,7 +369,7 @@ proc smoothlyCombine*(
   makeUintArgs [k]
   assertContiguousInputs [d1Index, d2Index]
   result = prog.addInsnWithOutput makeInsn(
-    SmoothAddOp, prog.nextArgI, prog.nextOutputI, 1, d1Index.some, 2.uint8.some
+    SmoothUnion, prog.nextArgI, prog.nextOutputI, 1, d1Index.some, 2.uint8.some
   )
   prog.addArgs args
 
@@ -379,7 +379,7 @@ proc smoothlyCut*(
   makeUintArgs [k]
   assertContiguousInputs [d1Index, d2Index]
   result = prog.addInsnWithOutput makeInsn(
-    SmoothSubOp, prog.nextArgI, prog.nextOutputI, 1, d1Index.some, 2.uint8.some
+    SmoothDifference, prog.nextArgI, prog.nextOutputI, 1, d1Index.some, 2.uint8.some
   )
   prog.addArgs args
 
@@ -389,6 +389,6 @@ proc smoothlyIntersect*(
   makeUintArgs [k]
   assertContiguousInputs [d1Index, d2Index]
   result = prog.addInsnWithOutput makeInsn(
-    SmoothInterOp, prog.nextArgI, prog.nextOutputI, 1, d1Index.some, 2.uint8.some
+    SmoothIntersection, prog.nextArgI, prog.nextOutputI, 1, d1Index.some, 2.uint8.some
   )
   prog.addArgs args

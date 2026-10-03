@@ -236,25 +236,25 @@ public T sdPlane<T>( vector<T, 3> p, vector<T, 3> n, T h ) where T : __BuiltinFl
 }
 
 [Differentiable]
-public T opUnion<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
+public T sdfUnion<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
 	return min(d1, d2);
 }
 
-// Exact Euclidean CSG subtraction: cuts d1 from d2.
+// Exact Euclidean CSG difference: cuts d1 from d2.
 // Evaluates the exterior distance field with Euclidean Pythagorean corner term length(max(d, 0.0)),
 // preserving true Euclidean distances (|∇f| = 1) in exterior space around cut corners and seams.
 [Differentiable]
-public T opSubtraction<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
+public T sdfDifference<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
 	vector<T, 2> d = vector<T, 2>(-d1, d2);
 	return min(max(d.x, d.y), (T)0.0) + length(max(d, (T)0.0));
 }
 
-// Approximate CSG subtraction using naive max(-d1, d2).
+// Approximate CSG difference using naive max(-d1, d2).
 // Preserves metric distance inside the cut (d < 0), but distorts exterior distance (d > 0) near
 // concave corners and edges by omitting the Euclidean corner radius, which causes non-Lipschitz
 // gradient steps and severe penumbra banding / artifacts during raymarching and soft shadow tracing.
 [Differentiable]
-public T opSubtractionApprox<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
+public T sdfDifferenceApprox<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
 	return max(-d1, d2);
 }
 
@@ -262,7 +262,7 @@ public T opSubtractionApprox<T>(T d1, T d2) where T : __BuiltinFloatingPointType
 // Includes the corner term length(max(d, 0.0)) to preserve exact Euclidean distance
 // outside intersecting boundaries and along the intersection seam.
 [Differentiable]
-public T opIntersection<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
+public T sdfIntersection<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
 	vector<T, 2> d = vector<T, 2>(d1, d2);
 	return min(max(d.x, d.y), (T)0.0) + length(max(d, (T)0.0));
 }
@@ -270,30 +270,85 @@ public T opIntersection<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
 // Approximate CSG intersection using naive max(d1, d2).
 // Preserves interior distances but under-estimates exterior Euclidean distance near the intersection seam.
 [Differentiable]
-public T opIntersectionApprox<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
+public T sdfIntersectionApprox<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
 	return max(d1, d2);
 }
 
 [Differentiable]
-public T opXor<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
+public T sdfSymmetricDifference<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
 	return max(min(d1, d2), -max(d1, d2));
 }
 
+// Struct for operations returning both distance and blend weight (weight in [0, 1]: 0 -> first SDF, 1 -> second SDF)
+public struct SdfBlend<T> where T : __BuiltinFloatingPointType {
+  public T dist;
+  public T weight;
+}
+
+// CSG blend weights (0 -> first SDF wins, 1 -> second SDF wins)
 [Differentiable]
-public T opSmoothUnion<T>( T d1, T d2, T k ) where T : __BuiltinFloatingPointType {
-	k *= (T) 4.0;
-	T h = max(k-abs(d1-d2), (T) 0.0);
-	return min(d1, d2) - h*h * (T) 0.25/k;
+public T sdfUnionWeight<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
+  return (d1 <= d2) ? (T)0.0 : (T)1.0;
 }
 
 [Differentiable]
-public T opSmoothSubtraction<T>( T d1, T d2, T k ) where T : __BuiltinFloatingPointType {
-	return -opSmoothUnion(d1,-d2,k);
+public T sdfDifferenceWeight<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
+  return (-d1 >= d2) ? (T)0.0 : (T)1.0;
 }
 
 [Differentiable]
-public T opSmoothIntersection<T>( T d1, T d2, T k ) where T : __BuiltinFloatingPointType {
-	return -opSmoothUnion(-d1,-d2,k);
+public T sdfIntersectionWeight<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
+  return (d1 >= d2) ? (T)0.0 : (T)1.0;
+}
+
+[Differentiable]
+public T sdfSymmetricDifferenceWeight<T>(T d1, T d2) where T : __BuiltinFloatingPointType {
+  return (min(d1, d2) >= -max(d1, d2))
+    ? ((d1 <= d2) ? (T)0.0 : (T)1.0)
+    : ((d1 >= d2) ? (T)0.0 : (T)1.0);
+}
+
+[Differentiable]
+public T sdfSmoothUnionWeight<T>(T d1, T d2, T k) where T : __BuiltinFloatingPointType {
+  T blendK = k * (T)4.0;
+  return saturate((T)0.5 + (d1 - d2) / ((T)2.0 * blendK));
+}
+
+[Differentiable]
+public T sdfSmoothDifferenceWeight<T>(T d1, T d2, T k) where T : __BuiltinFloatingPointType {
+  T blendK = k * (T)4.0;
+  return saturate((T)0.5 + (d1 + d2) / ((T)2.0 * blendK));
+}
+
+[Differentiable]
+public T sdfSmoothIntersectionWeight<T>(T d1, T d2, T k) where T : __BuiltinFloatingPointType {
+  T blendK = k * (T)4.0;
+  return saturate((T)0.5 + (d2 - d1) / ((T)2.0 * blendK));
+}
+
+// Smooth CSG operations returning both distance and blend weight
+[Differentiable]
+public SdfBlend<T> sdfSmoothUnion<T>(T d1, T d2, T k) where T : __BuiltinFloatingPointType {
+  T blendK = k * (T)4.0;
+  T w = sdfSmoothUnionWeight(d1, d2, k);
+  T dist = lerp(d1, d2, w) - blendK * w * ((T)1.0 - w);
+  return { dist, w };
+}
+
+[Differentiable]
+public SdfBlend<T> sdfSmoothDifference<T>(T d1, T d2, T k) where T : __BuiltinFloatingPointType {
+  T blendK = k * (T)4.0;
+  T w = sdfSmoothDifferenceWeight(d1, d2, k);
+  T dist = lerp(-d1, d2, w) + blendK * w * ((T)1.0 - w);
+  return { dist, w };
+}
+
+[Differentiable]
+public SdfBlend<T> sdfSmoothIntersection<T>(T d1, T d2, T k) where T : __BuiltinFloatingPointType {
+  T blendK = k * (T)4.0;
+  T w = sdfSmoothIntersectionWeight(d1, d2, k);
+  T dist = lerp(d1, d2, w) + blendK * w * ((T)1.0 - w);
+  return { dist, w };
 }
 
 // Quadratic polynomial smooth min
@@ -306,56 +361,3 @@ public float smin(float a, float b, float k) {
 // TODO: Add rotation/translation and scaling (need function pointers or a way to pass functions as args,
 // maybe https://code4k.blogspot.com/2011/11/advanced-hlsl-using-closures-and.html). Mirroring, repetition,
 // displacement, twisting and bending also need functions as args.
-
-public struct MatIAndDist {
-  public uint matI;
-  public float dist;
-  __init() {
-    matI = 0;
-    dist = float.maxValue;
-  }
-}
-
-MatIAndDist neg(MatIAndDist md1) {
-  var negation = md1;
-  negation.dist = -negation.dist;
-  return negation;
-}
-
-public MatIAndDist min(MatIAndDist md1, MatIAndDist md2) {
-  if (md1.dist <= md2.dist) {
-    return md1;
-  } else {
-    return md2;
-  }
-}
-
-public MatIAndDist max(MatIAndDist md1, MatIAndDist md2) {
-  if (md1.dist >= md2.dist) {
-    return md1;
-  } else {
-    return md2;
-  }
-}
-
-public MatIAndDist opUnion(MatIAndDist md1, MatIAndDist md2) { return min(md1, md2); }
-public MatIAndDist opSubtraction(MatIAndDist md1, MatIAndDist md2) { return max(neg(md1), md2); }
-public MatIAndDist opIntersection(MatIAndDist md1, MatIAndDist md2) { return max(md1, md2); }
-public MatIAndDist opXor(MatIAndDist md1, MatIAndDist md2) { return max(min(md1, md2), neg(max(md1, md2))); }
-
-// TODO: Replace this placeholder smooth union with one that actually blends the material with the same smoothing curve.
-// Or at the very least use material from opUnion.
-public MatIAndDist opSmoothUnion(MatIAndDist md1, MatIAndDist md2, float k) {
-  k *= 4.0;
-  float h = max(k - abs(md1.dist - md2.dist), 0.0);
-  float dist = min(md1.dist, md2.dist) - h * h * 0.25 / k;
-  var res = md1;
-  res.dist = dist;
-  return res;
-}
-public MatIAndDist opSmoothSubtraction(MatIAndDist md1, MatIAndDist md2, float k) {
-  return neg(opSmoothUnion(md1, neg(md2), k));
-}
-public MatIAndDist opSmoothIntersection(MatIAndDist md1, MatIAndDist md2, float k) {
-  return neg(opSmoothUnion(neg(md1), neg(md2), k));
-}
